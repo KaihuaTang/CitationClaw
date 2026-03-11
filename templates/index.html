@@ -843,7 +843,24 @@ async function fetchScholarPapers() {
     const btn = document.getElementById('scholar-fetch-btn');
     btn.disabled = true; btn.textContent = '获取中…';
     document.getElementById('scholar-result-area').style.display = 'none';
-    if (window.saveIndexConfig) await window.saveIndexConfig();
+    // 直接将当前填写的两个 key 写入后端配置，无需手动保存
+    try {
+        const scraperKeys = (document.getElementById('idx-scraper-keys').value || '')
+            .split(',').map(k => k.trim()).filter(Boolean);
+        const openaiKey = document.getElementById('idx-openai-key').value || '';
+        if (scraperKeys.length || openaiKey) {
+            const cfgResp = await fetch('/api/config');
+            const existing = await cfgResp.json();
+            const patch = Object.assign({}, existing);
+            if (scraperKeys.length) patch.scraper_api_keys = scraperKeys;
+            if (openaiKey) patch.openai_api_key = openaiKey;
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(patch)
+            });
+        }
+    } catch(e) { console.error('自动保存配置失败:', e); }
     try {
         const res = await fetch('/api/scholar/papers', {
             method: 'POST',

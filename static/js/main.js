@@ -530,7 +530,7 @@ function initIndexPage() {
         await saveIndexConfig();
     });
 
-    window.saveIndexConfig = async function saveIndexConfig() {
+    async function saveIndexConfig() {
         const el = id => document.getElementById(id);
         const keys = el('idx-scraper-keys').value.split(',').map(k => k.trim()).filter(k => k);
         const body = {
