@@ -41,7 +41,21 @@ python start.py
 
 ## 使用流程
 
-### 第一步：填写要分析的论文
+### 第一步：配置 API（首次使用）
+
+展开页面上的「API 配置」，填写：
+
+| 字段                                                              | 说明                                                                |
+|-----------------------------------------------------------------|-------------------------------------------------------------------|
+| **两个API Key 必填**⬇️                                              |                                                                   |
+| **ScraperAPI Key** [前往获取](https://dashboard.scraperapi.com)     | 用于抓取 Google Scholar。（ScraperAPI对于免费账户有1000积分试用，可供爬取50次）           |
+| **LLM API Key** [推荐V-API](https://api.gpt.ge/register?aff=qH2n) | 支持任意 OpenAI 兼容格式的 API Key                                         |
+| **其他配置 选填**⬇️                                                   | |
+| **Base URL**                                                    | API 服务地址（默认使用V-API） `https://api.gpt.ge/v1/`                      |
+| **Search Model**                                                | **必须具备实时 web search 能力**（推荐V-API） `gemini-3-flash-preview-search` |
+| **Dashboard Model**                                             | 生成报告专用，无需 search 能力（推荐V-API） `gemini-3-flash-preview-nothinking`  |
+
+### 第二步：填写要分析的论文
 
 支持两种方式输入论文：
 
@@ -54,7 +68,7 @@ Attention Is All You Need
 BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding
 ```
 
-**方式 B：从 Google Scholar 学者主页导入 （首次使用先进行第三步填写ScraperAPI并保存配置）**
+**方式 B：从 Google Scholar 学者主页导入**
 
 粘贴任意学者的 Google Scholar 主页 URL，系统自动获取该学者的全部论文列表，勾选感兴趣的论文后一键导入，无需手动复制题目：
 
@@ -62,29 +76,16 @@ BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding
 https://scholar.google.com/citations?user=xxxxxx
 ```
 
-### 第二步：选择分析层级
+### 第三步：选择分析层级
 
-| 层级          | 适用场景 |
-|-------------|---------|
-| **全面版（推荐）** | 完整分析，对所有施引文献查找引用原句 |
-| **进阶版**     | 施引文献多时推荐，仅对院士/Fellow 查找引用原句 |
-| **标准版**     | 只需学者画像和统计图表，不需要引用原文 |
-| **指定学者版**   | 快速查询某几位学者是否引用了目标论文 |
-| **学者查证版**   | 核实特定学者引用情况，明确给出匹配/未匹配报告 |
+| 层级             | 适用场景 |
+|----------------|---------|
+| **全面版（默认，推荐）** | 完整分析，对所有施引文献查找引用原句 |
+| **进阶版**        | 施引文献多时推荐，仅对院士/Fellow 查找引用原句 |
+| **标准版**        | 只需学者画像和统计图表，不需要引用原文 |
+| **指定学者版**      | 快速查询某几位学者是否引用了目标论文 |
+| **学者查证版**      | 核实特定学者引用情况，明确给出匹配/未匹配报告 |
 
-### 第三步：配置 API（首次使用）
-
-展开页面上的「API 配置」，填写：
-
-| 字段                                                              | 说明                                                          |
-|-----------------------------------------------------------------|-------------------------------------------------------------|
-| **ScraperAPI Key** [前往获取](https://dashboard.scraperapi.com)     | 用于抓取 Google Scholar。（ScraperAPI对于免费账户有1000积分试用，可供爬取50次）     |
-| **LLM API Key** [推荐V-API](https://api.gpt.ge/register?aff=qH2n) | 支持任意 OpenAI 兼容格式的 API Key                                   |
-| **Base URL**                                                    | API 服务地址，默认使用V-API `https://api.gpt.ge/v1/`                 |
-| **Search Model**                                                | **必须具备实时 web search 能力**，推荐V-API `gemini-3-flash-preview-search` |
-| **Dashboard Model**                                             | 生成报告专用，无需 search 能力，推荐V-API `gemini-3-flash-preview-nothinking`  |
-
-保存配置后点击**开始分析**。
 
 ### 第四步：获取报告
 
