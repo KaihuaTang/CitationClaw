@@ -104,7 +104,7 @@ class ConfigUpdate(BaseModel):
 
 @app.get("/api/presets")
 async def get_presets():
-    from app.config_manager import SERVICE_TIER_PRESETS
+    from citationclaw.app.config_manager import SERVICE_TIER_PRESETS
     return SERVICE_TIER_PRESETS
 
 
@@ -231,7 +231,7 @@ async def check_quota():
     config = config_manager.get()
     if not config.api_access_token or not config.api_user_id:
         return {"configured": False, "message": "未配置系统令牌或用户ID"}
-    from app.cost_tracker import CostTracker
+    from citationclaw.app.cost_tracker import CostTracker
     ct = CostTracker()
     result = await ct.query_llm_quota(config.openai_base_url, config.api_access_token, config.api_user_id)
     if result:
@@ -281,7 +281,7 @@ async def fetch_scholar_papers(request: ScholarProfileRequest):
         return JSONResponse(status_code=400,
             content={"error": "未配置 ScraperAPI 密钥，请先在配置页设置"})
 
-    from core.scholar_profile_scraper import ScholarProfileScraper
+    from citationclaw.core.scholar_profile_scraper import ScholarProfileScraper
     scraper = ScholarProfileScraper(
         api_keys=config.scraper_api_keys,
         log_callback=print,

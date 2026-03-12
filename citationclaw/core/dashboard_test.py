@@ -44,7 +44,7 @@ if str(_ROOT) not in sys.path:
 def _load_config() -> dict:
     """从 config.json 读取 API 配置，失败时返回空字典。"""
     try:
-        from app.config_manager import ConfigManager
+        from citationclaw.app.config_manager import ConfigManager
         cm = ConfigManager(str(_ROOT / "config.json"))
         cfg = cm.get()
         return {
@@ -196,7 +196,7 @@ def main():
     }
 
     # ── 7. 调用 DashboardGenerator ────────────────────────────────────────
-    from core.dashboard_generator import DashboardGenerator
+    from citationclaw.core.dashboard_generator import DashboardGenerator
 
     def log(msg: str):
         print(f"  {msg}")

@@ -404,7 +404,7 @@ class TaskExecutor:
           → Phase 3（导出 Excel/JSON）
         """
         import json as _json
-        from core.url_finder import PaperURLFinder
+        from citationclaw.core.url_finder import PaperURLFinder
 
         self.is_running = True
         self.should_cancel = False
@@ -737,8 +737,8 @@ class TaskExecutor:
                     self.log_manager.info(f"🧪 已生成伪造引用描述: {citing_desc_excel}")
                 else:
                     self.log_manager.info("▶ Phase 4: 搜索引用描述")
-                    from core.citing_description_searcher import CitingDescriptionSearcher
-                    from core.citing_description_cache import CitingDescriptionCache
+                    from citationclaw.core.citing_description_searcher import CitingDescriptionSearcher
+                    from citationclaw.core.citing_description_cache import CitingDescriptionCache
                     desc_cache = CitingDescriptionCache()
                     desc_searcher = CitingDescriptionSearcher(
                         api_key=config.openai_api_key,
@@ -764,7 +764,7 @@ class TaskExecutor:
             html_file = None
             if config.enable_dashboard:
                 self.log_manager.info("▶ Phase 5: 生成 HTML 画像报告")
-                from core.dashboard_generator import DashboardGenerator
+                from citationclaw.core.dashboard_generator import DashboardGenerator
                 html_file = result_dir / f"{output_prefix}_dashboard.html"
 
                 all_renowned = excel_file.with_stem(excel_file.stem + "_all_renowned_scholar")
