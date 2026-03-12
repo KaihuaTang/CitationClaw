@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/assets/icon.png" width="110" alt="CitationClaw Logo"><br>
 
-# CitationClaw — 论文被引画像分析智能体
+# CitationClaw — 论文被引画像分析🦞
 
   [![🌐 项目主页](https://img.shields.io/badge/🌐-项目主页-blue?style=flat-square)](https://visionxlab.github.io/CitationAgent/)
   ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
