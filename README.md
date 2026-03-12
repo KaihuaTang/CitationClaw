@@ -25,7 +25,7 @@
 
 | 日期 | 版本 | 更新内容 |
 |------|------|---------|
-| 2026-03-12 | v1.0.2 | 📦 发布 PyPI 包：`pip install citationclaw` 一行安装，支持跨平台（macOS / Linux / Windows）；修复 openpyxl 版本兼容性问题 |
+| 2026-03-12 | v1.0.3 | 📦 PyPI 最新版本：`pip install citationclaw` 一行安装，自动打开浏览器，支持跨平台（macOS / Linux / Windows） |
 | 2026-03-12 | v1.0 | 🎉 首次公开发布：支持论文题目输入与 Google Scholar 批量导入、五种分析层级、著名学者自动识别、可视化 HTML 画像报告、断点续爬与缓存复用 |
 
 ---
