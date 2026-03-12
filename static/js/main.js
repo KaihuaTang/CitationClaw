@@ -636,6 +636,8 @@ function initIndexPage() {
             addPaper(paperInput.value.trim());
             paperInput.value = '';
         }
+        // API Key 检查
+        if (window.checkApiKeysAndAlert && !window.checkApiKeysAndAlert(true, true)) return;
         const groups = getPaperGroups();
         if (groups.length === 0) {
             alert('请输入至少一篇论文题目');

@@ -131,7 +131,7 @@
 </div>
 
 <!-- API Config Card -->
-<div class="agent-card mb-4">
+<div class="agent-card mb-4" id="api-config-card">
   <div class="agent-card-label">
     <i class="bi bi-key" style="color:var(--accent)"></i>&nbsp; API 配置
   </div>
@@ -822,12 +822,53 @@
 </div>
 </div><!-- /spa-panel-results -->
 
+<!-- API Key 提醒弹窗 -->
+<div class="modal fade" id="api-key-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:420px">
+    <div class="modal-content">
+      <div class="modal-header" style="border-bottom:1px solid #e5e7eb;padding:16px 20px">
+        <h5 class="modal-title" style="font-size:15px;font-weight:600">
+          <i class="bi bi-key-fill" style="color:#2563eb;margin-right:6px"></i>请先填写 API Key
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" style="padding:18px 20px">
+        <p style="margin-bottom:10px;color:#374151;font-size:14px">使用该功能前，请先在下方「API 配置」区域填写：</p>
+        <ul id="api-key-modal-missing" style="color:#dc3545;margin-bottom:0;padding-left:18px;font-size:14px"></ul>
+      </div>
+      <div class="modal-footer" style="padding:12px 20px;gap:8px">
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="scrollToApiConfig()">前往填写</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/websocket.js"></script>
 <script src="/static/js/main.js"></script>
 <script>
+// ── API Key 检查 ────────────────────────────────────────────────
+function checkApiKeysAndAlert(needScraper, needLLM) {
+    const scraperKeys = (document.getElementById('idx-scraper-keys').value || '')
+        .split(',').map(k => k.trim()).filter(Boolean);
+    const openaiKey = (document.getElementById('idx-openai-key').value || '').trim();
+    const missing = [];
+    if (needScraper && scraperKeys.length === 0) missing.push('ScraperAPI Key（用于抓取 Google Scholar）');
+    if (needLLM && !openaiKey) missing.push('LLM API Key（用于学者信息搜索与报告生成）');
+    if (missing.length === 0) return true;
+    document.getElementById('api-key-modal-missing').innerHTML =
+        missing.map(m => `<li>${m}</li>`).join('');
+    new bootstrap.Modal(document.getElementById('api-key-modal')).show();
+    return false;
+}
+function scrollToApiConfig() {
+    bootstrap.Modal.getInstance(document.getElementById('api-key-modal'))?.hide();
+    document.getElementById('api-config-card').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
 // ── Scholar Profile Import ────────────────────────────────────
 function toggleScholarImport() {
     const body = document.getElementById('scholar-import-body');
@@ -838,6 +879,7 @@ function toggleScholarImport() {
 }
 
 async function fetchScholarPapers() {
+    if (!checkApiKeysAndAlert(true, false)) return;
     const url = document.getElementById('scholar-url-input').value.trim();
     if (!url) { alert('请输入 Google Scholar 主页链接'); return; }
     const btn = document.getElementById('scholar-fetch-btn');
