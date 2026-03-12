@@ -14,6 +14,7 @@
   ![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)
   ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?style=flat-square&logo=openai&logoColor=white)
   ![ScraperAPI](https://img.shields.io/badge/爬取-ScraperAPI-FF6B35?style=flat-square)
+  [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 **输入论文题目或者从谷歌学术主页选择论文，一键获得完整的被引分析报告。**<br>
 自动爬取所有施引文献、识别引用学者背景，最终生成一份精美的可视化 HTML 画像报告，用于了解自己/他人的被引情况。
