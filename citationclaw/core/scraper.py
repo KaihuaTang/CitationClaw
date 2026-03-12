@@ -4,7 +4,7 @@ import asyncio
 import re
 from pathlib import Path
 from typing import Callable, Optional, Tuple
-from core.parser import google_scholar_html_parser
+from citationclaw.core.parser import google_scholar_html_parser
 
 
 class GoogleScholarScraper:

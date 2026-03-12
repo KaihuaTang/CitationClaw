@@ -2,13 +2,13 @@ import asyncio
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
-from core.scraper import GoogleScholarScraper
-from core.author_searcher import AuthorSearcher
-from core.author_cache import AuthorInfoCache
-from core.exporter import ResultExporter
-from app.log_manager import LogManager
-from app.config_manager import AppConfig
-from app.cost_tracker import CostTracker
+from citationclaw.core.scraper import GoogleScholarScraper
+from citationclaw.core.author_searcher import AuthorSearcher
+from citationclaw.core.author_cache import AuthorInfoCache
+from citationclaw.core.exporter import ResultExporter
+from citationclaw.app.log_manager import LogManager
+from citationclaw.app.config_manager import AppConfig
+from citationclaw.app.cost_tracker import CostTracker
 
 
 class TaskExecutor:

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from openai import AsyncOpenAI
 import httpx
-from core.citing_description_cache import CitingDescriptionCache
+from citationclaw.core.citing_description_cache import CitingDescriptionCache
 
 
 class CitingDescriptionSearcher:

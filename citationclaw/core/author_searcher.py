@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from openai import AsyncOpenAI
 import httpx
-from core.author_cache import AuthorInfoCache
+from citationclaw.core.author_cache import AuthorInfoCache
 
 
 class AuthorSearcher:

@@ -7,17 +7,18 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from app.config_manager import ConfigManager, AppConfig
-from app.task_executor import TaskExecutor
-from app.log_manager import LogManager
+from citationclaw.app.config_manager import ConfigManager, AppConfig
+from citationclaw.app.task_executor import TaskExecutor
+from citationclaw.app.log_manager import LogManager
 
 
 # FastAPI应用
 app = FastAPI(title="论文被引画像智能体", version="1.0.0")
 
-# 静态文件和模板
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# 静态文件和模板（使用包内路径，兼容 pip install 和本地开发）
+_PKG_DIR = Path(__file__).parent.parent
+app.mount("/static", StaticFiles(directory=str(_PKG_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(_PKG_DIR / "templates"))
 
 # 全局对象
 config_manager = ConfigManager()
