@@ -26,6 +26,11 @@ data/result-*/
 data/cache/
 config.json
 .superpowers/
+
+# Local-only files (PyPI publishing & Claude instructions)
+CLAUDE.md
+publish.sh
+pyproject.toml
 homepage-preview*.png
 teaser-full.png
 teaser-charts.png
