@@ -52,7 +52,7 @@ class AuthorSearcher:
                     max_keepalive_connections=20,  # 保持活跃的连接数
                     keepalive_expiry=30.0     # 连接保持时间（秒）
                 ),
-                timeout=60.0
+                timeout=30.0
             )
 
             self.client = AsyncOpenAI(
@@ -67,7 +67,7 @@ class AuthorSearcher:
             self.client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=60.0,
+                timeout=30.0,
                 max_retries=2
             )
 
@@ -208,7 +208,7 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 搜索API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)")
+                self.log_callback(f"⚠️ 搜索API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
                 return await self.search_fn(query, retry_count + 1, max_retries)
             else:
@@ -257,7 +257,7 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 二次筛选API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)")
+                self.log_callback(f"⚠️ 二次筛选API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
                 return await self.chat_fn(query, retry_count + 1, max_retries)
             else:
@@ -308,7 +308,7 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 格式化输出重量级学者API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)")
+                self.log_callback(f"⚠️ 格式化输出重量级学者API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
                 return await self.format_fn(query, retry_count + 1, max_retries)
             else:
@@ -358,7 +358,7 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 作者校验API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)")
+                self.log_callback(f"⚠️ 作者校验API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
                 return await self.verify_fn(query, retry_count + 1, max_retries)
             else:

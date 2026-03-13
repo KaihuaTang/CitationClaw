@@ -22,7 +22,7 @@ class CitingDescriptionSearcher:
     ):
         http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
-            timeout=60.0
+            timeout=30.0
         )
         self.client = AsyncOpenAI(
             api_key=api_key,
@@ -49,6 +49,8 @@ class CitingDescriptionSearcher:
                 return comp.choices[0].message.content or ""
             except Exception as e:
                 if i < retries - 1:
+                    if i == 0:
+                        self.log(f"⚠️ 搜索API错误: {e}，正在启用重试机制，请耐心等待！")
                     await asyncio.sleep(2 ** i)
                 else:
                     self.log(f"⚠️ 搜索API错误: {e}")
