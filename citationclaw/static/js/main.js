@@ -622,22 +622,8 @@ function initIndexPage() {
         // Update global progress bar
         GlobalProgress.show(currentPhase, progress.percentage || 0);
     });
-    ws.on('heartbeat', data => {
-        const bar = document.getElementById('running-heartbeat');
-        const msg = document.getElementById('hb-msg');
-        if (!bar || !msg) return;
-        const elapsed = data.elapsed || 0;
-        const mins = Math.floor(elapsed / 60);
-        const secs = elapsed % 60;
-        const timeStr = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
-        msg.textContent = `还在运行中，已运行时长为${timeStr}，请耐心等待！`;
-        bar.style.display = 'flex';
-    });
-    ws.on('heartbeat_done', () => {
-        const bar = document.getElementById('running-heartbeat');
-        if (bar) bar.style.display = 'none';
-    });
     ws.on('all_done', data => {
+        stopRunTimer();
         showIndexResults(data);
         // Hide global progress after 3 seconds
         setTimeout(() => { GlobalProgress.hide(); }, 3000);
@@ -688,6 +674,7 @@ function initIndexPage() {
         document.getElementById('idx-progress-section').style.display = 'block';
         document.getElementById('idx-log-section').style.display = 'block';
         document.getElementById('idx-results-section').style.display = 'none';
+        startRunTimer();
 
         // 清空日志，显示 empty placeholder
         document.getElementById('idx-log-container').innerHTML =
@@ -741,12 +728,38 @@ function initIndexPage() {
             '<div class="reasoning-empty"><div class="reasoning-empty-icon">🧹</div><div class="reasoning-empty-text">日志已清空</div></div>';
     });
 
+    let _runTimer = null;
+    let _runStart  = 0;
+
+    function startRunTimer() {
+        _runStart = Date.now();
+        const bar = document.getElementById('running-heartbeat');
+        const msg = document.getElementById('hb-msg');
+        if (bar) bar.style.display = 'flex';
+        if (msg) msg.textContent = '还在运行中，请耐心等待！';
+        if (_runTimer) clearInterval(_runTimer);
+        _runTimer = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - _runStart) / 1000);
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            const timeStr = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
+            if (msg) msg.textContent = `还在运行中，已运行时长为${timeStr}，请耐心等待！`;
+        }, 1000);
+    }
+
+    function stopRunTimer() {
+        if (_runTimer) { clearInterval(_runTimer); _runTimer = null; }
+        const bar = document.getElementById('running-heartbeat');
+        if (bar) bar.style.display = 'none';
+    }
+
     function resetRunBtn() {
         runBtn.disabled = false;
         runBtn.innerHTML = '<i class="bi bi-play-fill"></i> 开始分析';
         document.getElementById('idx-cancel-btn').style.display = 'none';
         const thinking = document.getElementById('rp-thinking-indicator');
         if (thinking) thinking.classList.remove('active');
+        stopRunTimer();
     }
 
     // 检测当前 phase
