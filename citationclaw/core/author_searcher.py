@@ -431,6 +431,7 @@ class AuthorSearcher:
         total_papers: int,
         semaphore: asyncio.Semaphore,
         citing_paper: str = "",
+        completed_state: Optional[dict] = None,
     ) -> tuple:
         """
         搜索单篇论文的作者信息（并行任务单元）。
@@ -572,7 +573,13 @@ class AuthorSearcher:
                             'Formated Renowned Scholar': format_scholar_record,
                         })
 
-            self.log_callback(f"[{count}/{total_papers}] 搜索完成: {paper_title[:50]}...")
+            if completed_state is not None:
+                async with completed_state["lock"]:
+                    completed_state["n"] += 1
+                    log_num = completed_state["n"]
+            else:
+                log_num = count
+            self.log_callback(f"[{log_num}/{total_papers}] 搜索完成: {paper_title[:50]}...")
             return (count, record_dict)
 
     async def search(
@@ -627,6 +634,9 @@ class AuthorSearcher:
         # 创建信号量控制并发数
         semaphore = asyncio.Semaphore(parallel_workers)
 
+        # 创建共享完成计数器（用于日志按完成顺序编号）
+        completed_state = {"n": 0, "lock": asyncio.Lock()}
+
         # 创建所有任务
         tasks = []
         for task_info in tasks_to_process:
@@ -644,6 +654,7 @@ class AuthorSearcher:
                     total_papers=total_papers,
                     semaphore=semaphore,
                     citing_paper=citing_paper,
+                    completed_state=completed_state,
                 )
             )
             tasks.append(task)
