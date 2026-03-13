@@ -37,7 +37,7 @@ class CitingDescriptionSearcher:
         self._authors_cache: dict[str, str] = {}
         self._authors_locks: dict[str, asyncio.Lock] = {}
 
-    async def _search_fn(self, query: str, retries: int = 3) -> str:
+    async def _search_fn(self, query: str, retries: int = 3, log_prefix: str = "") -> str:
         """调用搜索API（启用web_search_options）"""
         for i in range(retries):
             try:
@@ -50,13 +50,13 @@ class CitingDescriptionSearcher:
             except Exception as e:
                 if i < retries - 1:
                     if i == 0:
-                        self.log(f"⚠️ 搜索API错误: {e}，正在启用重试机制，请耐心等待！")
+                        self.log(f"{log_prefix}⚠️ 搜索API错误: {e}，正在启用重试机制，请耐心等待！")
                     await asyncio.sleep(2 ** i)
                 else:
                     self.log(f"⚠️ 搜索API错误: {e}")
                     return "NONE"
 
-    async def _get_target_authors(self, target_title: str) -> str:
+    async def _get_target_authors(self, target_title: str, log_prefix: str = "") -> str:
         """获取目标论文作者（带缓存+锁，同一目标论文只查一次LLM）"""
         if target_title in self._authors_cache:
             return self._authors_cache[target_title]
@@ -69,17 +69,17 @@ class CitingDescriptionSearcher:
                 return self._authors_cache[target_title]
             q = (f"请搜索论文《{target_title}》的所有作者，"
                  f"只需按顺序列出姓名，格式：作者1, 作者2, ...")
-            authors = await self._search_fn(q)
+            authors = await self._search_fn(q, log_prefix=log_prefix)
             self._authors_cache[target_title] = authors
             self.log(f"✅ 已缓存目标论文作者: 《{target_title[:40]}...》")
             return authors
 
     async def _find_description(
-        self, target_title: str, citing_title: str, citing_url: str
+        self, target_title: str, citing_title: str, citing_url: str, log_prefix: str = ""
     ) -> str:
         """搜索 citing_title 中对 target_title 的引用描述"""
         # Step1: 找目标论文作者（缓存，同一目标论文只查一次LLM）
-        authors = await self._get_target_authors(target_title)
+        authors = await self._get_target_authors(target_title, log_prefix=log_prefix)
 
         # Step2: 搜索引用描述
         q2 = (
@@ -91,7 +91,7 @@ class CitingDescriptionSearcher:
             f"3. 【情感判断标准】仅当原文中出现明确的积极评价词汇（如 'state-of-the-art'、'pioneering'、'significantly outperforms'、'groundbreaking'、'novel and effective' 等），才在摘录后注明\"【正面引用】\"；若是客观陈述、中立转述或背景铺垫，不做任何情感标注。\n"
             f"4. 找不到则输出'无法找到相关引用描述'。"
         )
-        return await self._search_fn(q2)
+        return await self._search_fn(q2, log_prefix=log_prefix)
 
     async def search(
         self,
@@ -138,7 +138,8 @@ class CitingDescriptionSearcher:
                         self.progress(completed, total)
                         self.log(f"[{completed}/{total}] 缓存命中，跳过搜索: {citing_title[:40]}...")
                         return idx, cached
-                desc = await self._find_description(target, citing_title, citing_url)
+                log_prefix = f"[{idx + 1}/{total}] "
+                desc = await self._find_description(target, citing_title, citing_url, log_prefix=log_prefix)
                 # 写入缓存（包括 "NONE" / "自引" 等结果，避免重复搜索）
                 if self.cache is not None:
                     await self.cache.update(citing_url, citing_title, target, desc)

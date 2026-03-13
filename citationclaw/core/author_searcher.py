@@ -163,7 +163,7 @@ class AuthorSearcher:
             "7. 若无法找到任何可信来源，请明确说明\"未检索到可信来源支持该信息\"，禁止基于推测补充信息。"
         )
 
-    async def search_fn(self, query: str, retry_count: int = 0, max_retries: int = 5) -> str:
+    async def search_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
         """
         调用搜索模型（启用web搜索）
 
@@ -208,14 +208,14 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 搜索API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
+                self.log_callback(f"{log_prefix}⚠️ 搜索API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
-                return await self.search_fn(query, retry_count + 1, max_retries)
+                return await self.search_fn(query, retry_count + 1, max_retries, log_prefix)
             else:
                 self.log_callback(f"❌ 搜索API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def chat_fn(self, query: str, retry_count: int = 0, max_retries: int = 5) -> str:
+    async def chat_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
         """
         调用对话模型（不启用web搜索，用于二次筛选）
 
@@ -257,14 +257,14 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 二次筛选API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
+                self.log_callback(f"{log_prefix}⚠️ 二次筛选API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
-                return await self.chat_fn(query, retry_count + 1, max_retries)
+                return await self.chat_fn(query, retry_count + 1, max_retries, log_prefix)
             else:
                 self.log_callback(f"❌ 二次筛选API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def format_fn(self, query: str, retry_count: int = 0, max_retries: int = 5) -> str:
+    async def format_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
         """
         调用格式输出模型（不启用web搜索，用于输出JSON）
 
@@ -308,14 +308,14 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 格式化输出重量级学者API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
+                self.log_callback(f"{log_prefix}⚠️ 格式化输出重量级学者API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
-                return await self.format_fn(query, retry_count + 1, max_retries)
+                return await self.format_fn(query, retry_count + 1, max_retries, log_prefix)
             else:
                 self.log_callback(f"❌ 格式化输出重量级学者API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def verify_fn(self, query: str, retry_count: int = 0, max_retries: int = 5) -> str:
+    async def verify_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
         """
         调用校验模型（启用web搜索，用于作者信息真实性校验）
 
@@ -358,9 +358,9 @@ class AuthorSearcher:
             # 其他错误（包括超时）- 使用指数退避重试
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 30)  # 指数退避，最多等待30秒
-                self.log_callback(f"⚠️ 作者校验API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
+                self.log_callback(f"{log_prefix}⚠️ 作者校验API错误: {e}，{wait_time}秒后重试 (第{retry_count + 1}/{max_retries}次)，请耐心等待！")
                 await asyncio.sleep(wait_time)
-                return await self.verify_fn(query, retry_count + 1, max_retries)
+                return await self.verify_fn(query, retry_count + 1, max_retries, log_prefix)
             else:
                 self.log_callback(f"❌ 作者校验API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
@@ -430,7 +430,7 @@ class AuthorSearcher:
         async with semaphore:
             paper_title = paper_content['paper_title']
             paper_link  = paper_content['paper_link']
-            self.log_callback(f"[{count}/{total_papers}] 搜索: {paper_title[:50]}...")
+            log_prefix  = f"[{count}/{total_papers}] "
 
             record_dict = {
                 'PageID': page_id,
@@ -455,7 +455,7 @@ class AuthorSearcher:
             else:
                 query1 = f'Paper_Link: {paper_link}, Paper_Title: {paper_title}.'
                 query1 += '\n' + self.prompt1
-                response1 = await self.search_fn(query1)
+                response1 = await self.search_fn(query1, log_prefix=log_prefix)
                 record_dict['Searched Author-Affiliation'] = response1
 
                 first_author_query = (
@@ -464,7 +464,7 @@ class AuthorSearcher:
                     "以JSON格式输出（只输出JSON，无其他文字）：\n"
                     '{"first_author_institution": "机构全称", "first_author_country": "国家（中文）"}'
                 )
-                response_first = await self.format_fn(first_author_query)
+                response_first = await self.format_fn(first_author_query, log_prefix=log_prefix)
                 try:
                     fa = json.loads(response_first)
                     record_dict['First_Author_Institution'] = fa.get('first_author_institution', '')
@@ -497,7 +497,7 @@ class AuthorSearcher:
             else:
                 query2 = f'Paper_Link: {paper_link}, Paper_Title: {paper_title}, Author-Affiliation: {response1}'
                 query2 += '\n' + self.prompt2
-                response2 = await self.search_fn(query2)
+                response2 = await self.search_fn(query2, log_prefix=log_prefix)
                 record_dict['Searched Author Information'] = response2
                 if self.author_cache:
                     await self.author_cache.update(paper_link, paper_title, {
@@ -510,7 +510,7 @@ class AuthorSearcher:
                     record_dict['Author Verification'] = cached['Author Verification']
                 else:
                     query_verify = response2 + '\n\n' + self.author_verify_prompt
-                    response_verify = await self.verify_fn(query_verify)
+                    response_verify = await self.verify_fn(query_verify, log_prefix=log_prefix)
                     record_dict['Author Verification'] = response_verify
                     if self.author_cache:
                         await self.author_cache.update(paper_link, paper_title, {
@@ -528,7 +528,7 @@ class AuthorSearcher:
                     self.log_callback(f"  💾 [缓存] 知名学者: {paper_title[:40]}...")
                 else:
                     query_filter = response2 + '\n\n' + self.renowned_scholar_prompt
-                    response_filter = await self.chat_fn(query_filter)
+                    response_filter = await self.chat_fn(query_filter, log_prefix=log_prefix)
                     record_dict['Renowned Scholar'] = response_filter
                     format_scholar_record = []
                     scholar_count = 0
@@ -538,7 +538,7 @@ class AuthorSearcher:
                             scholars = [s for s in scholars if s != '' and "无" not in s]
                             for scholar in scholars:
                                 scholar_format_query = scholar + '\n\n' + self.renowned_scholar_formatoutput_prompt
-                                response_scholar_format = await self.format_fn(scholar_format_query)
+                                response_scholar_format = await self.format_fn(scholar_format_query, log_prefix=log_prefix)
                                 try:
                                     res = json.loads(response_scholar_format)
                                 except Exception:
@@ -560,6 +560,7 @@ class AuthorSearcher:
                             'Formated Renowned Scholar': format_scholar_record,
                         })
 
+            self.log_callback(f"[{count}/{total_papers}] 搜索完成: {paper_title[:50]}...")
             return (count, record_dict)
 
     async def search(
