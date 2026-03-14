@@ -4,7 +4,7 @@ from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from citationclaw.app.config_manager import ConfigManager, AppConfig
@@ -300,6 +300,105 @@ async def fetch_scholar_papers(request: ScholarProfileRequest):
     except Exception as e:
         return JSONResponse(status_code=500,
             content={"error": f"爬取失败: {str(e)}"})
+
+
+class ChatReportRequest(BaseModel):
+    """报告智能问答请求"""
+    messages: list          # [{"role": "user"|"assistant", "content": "..."}]
+    context: dict = {}      # 报告上下文（由 HTML 中嵌入的数据传入）
+
+
+def _build_report_system_prompt(ctx: dict) -> str:
+    targets   = ctx.get("target_papers", [])
+    stats     = ctx.get("stats", {})
+    scholars  = ctx.get("scholars", [])
+    keywords  = ctx.get("keywords", [])
+    top_p     = ctx.get("top_papers", [])
+    insights  = ctx.get("insights", [])
+    ctypes    = ctx.get("citation_types", [])
+    cpos      = ctx.get("citation_positions", [])
+    findings  = ctx.get("key_findings", [])
+    year_dist = ctx.get("year_dist", {})
+
+    def fmt_list(items, fn, limit=20):
+        return "\n".join(f"  - {fn(x)}" for x in items[:limit]) or "  （无数据）"
+
+    parts = [
+        "你是 CitationClaw🦞 智能分析助手，专门针对以下这份论文被引画像报告回答问题。",
+        "请基于报告数据作答，语言简洁专业，必要时引用具体数字。",
+        "若问题超出报告数据范围，请如实说明。",
+        "",
+        "## 目标论文",
+        fmt_list(targets, lambda t: t),
+        "",
+        "## 核心统计",
+        f"  - 引用论文总数：{stats.get('total', 'N/A')}",
+        f"  - 知名学者数量：{stats.get('scholars', 'N/A')}",
+        f"  - 院士/Fellow 数量：{stats.get('fellows', 'N/A')}",
+        f"  - 覆盖国家/地区：{stats.get('countries', 'N/A')}",
+        f"  - 最高单篇被引量：{stats.get('max_cit', 'N/A')}",
+        "",
+        "## 知名学者（前30位）",
+        fmt_list(scholars, lambda s: f"{s.get('name','')} | {s.get('level','')} | {s.get('country','')}", 30),
+        "",
+        "## 研究关键词",
+        "  " + "、".join(k.get("keyword", "") for k in keywords[:25]),
+        "",
+        "## 高影响力施引论文（Top 20）",
+        fmt_list(top_p, lambda p:
+            f"{p.get('title','')} ({p.get('year','')}, 被引{p.get('citations','')}次, {p.get('country','')})", 20),
+        "",
+        "## 年份分布",
+        "  " + "  ".join(f"{y}:{n}" for y, n in sorted(year_dist.items())),
+        "",
+        "## 引用类型分布",
+        fmt_list(ctypes, lambda c: f"{c.get('type','')} {c.get('count','')}篇"),
+        "",
+        "## 引用位置分布",
+        fmt_list(cpos, lambda p: f"{p.get('position','')} {p.get('count','')}篇"),
+        "",
+        "## AI 关键发现",
+        fmt_list(findings, lambda f: f),
+        "",
+        "## 数据洞察",
+        fmt_list(insights, lambda i: f"{i.get('title','')}: {i.get('body','')}"),
+    ]
+    return "\n".join(parts)
+
+
+@app.post("/api/chat/report")
+async def chat_report(request: ChatReportRequest):
+    """报告智能问答（流式返回）"""
+    config = config_manager.get()
+    if not config.openai_api_key or not config.openai_base_url:
+        return JSONResponse(status_code=400,
+                            content={"error": "未配置 LLM API，请先在配置页填写 API Key 和 Base URL"})
+
+    system_prompt = _build_report_system_prompt(request.context)
+    messages_to_send = [{"role": "system", "content": system_prompt}] + [
+        {"role": m["role"], "content": m["content"]} for m in request.messages
+    ]
+    model = config.dashboard_model  # nothinking 轻量模型
+
+    def _stream():
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=config.openai_api_key,
+                            base_url=config.openai_base_url,
+                            timeout=60.0)
+            stream = client.chat.completions.create(
+                model=model,
+                messages=messages_to_send,
+                stream=True,
+                max_tokens=1500,
+            )
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            yield f"\n\n[错误：{e}]"
+
+    return StreamingResponse(_stream(), media_type="text/plain; charset=utf-8")
 
 
 @app.post("/api/task/cancel")

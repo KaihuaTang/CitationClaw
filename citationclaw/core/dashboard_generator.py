@@ -1563,6 +1563,37 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
         kg_data_json = json.dumps({"nodes": kg_nodes, "links": kg_links},
                                   ensure_ascii=False)
 
+        # ── Compact report context for chat widget ──────────────────────────────
+        _chat_ctx = {
+            "target_papers": canonical_titles or [],
+            "stats": {
+                "total":    total_papers,
+                "scholars": stats.get("unique_scholars", 0),
+                "fellows":  stats.get("fellow_count", 0),
+                "countries": stats.get("country_count", 0),
+                "max_cit":  stats.get("max_cit", 0),
+            },
+            "scholars": [
+                {"name": s.get("name", ""), "level": s.get("level", ""),
+                 "country": s.get("country", "")}
+                for s in all_scholars[:30]
+            ],
+            "keywords": [{"keyword": k.get("keyword", ""), "keyword_cn": k.get("keyword_cn", "")}
+                         for k in keywords[:25]],
+            "top_papers": [
+                {"title": p.get("title", "")[:80], "year": p.get("year"),
+                 "citations": p.get("citations", 0), "country": p.get("country", "")}
+                for p in papers[:20]
+            ],
+            "year_dist": dict(stats.get("year_counter", {})),
+            "citation_types":      citation_analysis.get("citation_types", []),
+            "citation_positions":  citation_analysis.get("citation_positions", []),
+            "key_findings":        citation_analysis.get("key_findings", []),
+            "insights": [{"title": i.get("title", ""), "body": i.get("body", "")}
+                         for i in insights],
+        }
+        _chat_ctx_json = json.dumps(_chat_ctx, ensure_ascii=False)
+
         kg_section_html = """
 <!-- SECTION 09 -->
 <div class="section-header">
@@ -2339,6 +2370,189 @@ new Chart(document.getElementById('cTrend'), {{
 }})();
 </script>
 {kg_script}
+
+<!-- ═══ CHAT WIDGET ═══ -->
+<style>
+#cc-fab{{position:fixed;right:24px;bottom:24px;width:54px;height:54px;border-radius:50%;
+  background:linear-gradient(135deg,#2563eb,#1e40af);border:none;cursor:pointer;
+  font-size:26px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 20px rgba(37,99,235,0.5);z-index:10000;transition:transform .2s,box-shadow .2s;
+  color:#fff;line-height:1}}
+#cc-fab:hover{{transform:scale(1.1);box-shadow:0 6px 28px rgba(37,99,235,0.65)}}
+#cc-win{{position:fixed;right:24px;bottom:90px;width:400px;height:530px;
+  background:#0d1421;border:1px solid rgba(66,153,225,0.35);border-radius:16px;
+  display:flex;flex-direction:column;z-index:9999;
+  box-shadow:0 12px 48px rgba(0,0,0,0.7);
+  animation:ccSlideUp .25s ease;overflow:hidden}}
+@keyframes ccSlideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
+#cc-header{{display:flex;align-items:center;justify-content:space-between;
+  padding:13px 16px;background:rgba(37,99,235,0.15);
+  border-bottom:1px solid rgba(66,153,225,0.2);flex-shrink:0}}
+#cc-header-title{{display:flex;align-items:center;gap:8px;font-size:14px;
+  font-weight:600;color:#bee3f8}}
+#cc-header-sub{{font-size:10px;color:rgba(180,210,255,0.5);margin-top:1px}}
+#cc-close{{background:none;border:none;color:rgba(180,210,255,0.5);
+  cursor:pointer;font-size:18px;padding:0 2px;line-height:1}}
+#cc-close:hover{{color:#fff}}
+#cc-msgs{{flex:1;overflow-y:auto;padding:14px 14px 6px;display:flex;
+  flex-direction:column;gap:10px;scroll-behavior:smooth}}
+#cc-msgs::-webkit-scrollbar{{width:4px}}
+#cc-msgs::-webkit-scrollbar-thumb{{background:rgba(66,153,225,0.3);border-radius:2px}}
+.cc-bubble{{max-width:88%;padding:9px 13px;border-radius:12px;font-size:12.5px;
+  line-height:1.6;word-break:break-word;white-space:pre-wrap}}
+.cc-bubble.user{{align-self:flex-end;background:rgba(37,99,235,0.35);
+  color:#e2e8f0;border-bottom-right-radius:3px}}
+.cc-bubble.ai{{align-self:flex-start;background:rgba(255,255,255,0.05);
+  color:#cbd5e0;border-bottom-left-radius:3px;border:1px solid rgba(66,153,225,0.12)}}
+.cc-bubble.ai.typing::after{{content:'▌';animation:ccBlink .7s step-end infinite}}
+@keyframes ccBlink{{0%,100%{{opacity:1}}50%{{opacity:0}}}}
+#cc-offline{{text-align:center;padding:16px 12px;font-size:11.5px;color:rgba(180,210,255,0.5);
+  background:rgba(255,200,0,0.06);border-top:1px solid rgba(255,200,0,0.15);
+  margin:8px 14px;border-radius:8px;display:none}}
+#cc-input-row{{display:flex;gap:8px;padding:10px 12px;
+  border-top:1px solid rgba(66,153,225,0.15);flex-shrink:0}}
+#cc-input{{flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(66,153,225,0.25);
+  border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:12.5px;
+  font-family:'Noto Sans SC',sans-serif;resize:none;outline:none;
+  transition:border-color .2s}}
+#cc-input:focus{{border-color:rgba(66,153,225,0.6)}}
+#cc-input::placeholder{{color:rgba(180,210,255,0.3)}}
+#cc-send{{background:linear-gradient(135deg,#2563eb,#1e40af);border:none;
+  border-radius:8px;padding:8px 14px;color:#fff;font-size:12px;cursor:pointer;
+  flex-shrink:0;transition:opacity .2s;font-family:'Noto Sans SC',sans-serif}}
+#cc-send:hover{{opacity:0.85}}
+#cc-send:disabled{{opacity:0.4;cursor:default}}
+</style>
+
+<button id="cc-fab" onclick="ccToggle()" title="CitationClaw 智能助手">🦞</button>
+<div id="cc-win" style="display:none">
+  <div id="cc-header">
+    <div>
+      <div id="cc-header-title">🦞 CitationClaw 智能助手</div>
+      <div id="cc-header-sub">基于本报告数据 · AI 驱动</div>
+    </div>
+    <button id="cc-close" onclick="ccToggle()">✕</button>
+  </div>
+  <div id="cc-msgs">
+    <div class="cc-bubble ai">你好！我是 CitationClaw 智能助手🦞，已读取本报告所有数据。<br>你可以问我：引用趋势、知名学者、关键词分析、各类统计数据等任何问题。</div>
+  </div>
+  <div id="cc-offline">⚠️ 离线模式：请通过 CitationClaw 应用打开报告以启用 AI 问答功能。</div>
+  <div id="cc-input-row">
+    <textarea id="cc-input" rows="2" placeholder="问我关于这份报告的问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="cc-send" onclick="ccSend()">发送</button>
+  </div>
+</div>
+
+<script>
+(function(){{
+  var CTX = {_chat_ctx_json};
+  var history = [];
+  var isOpen = false;
+  var isStreaming = false;
+
+  /* ── Toggle window ── */
+  window.ccToggle = function() {{
+    isOpen = !isOpen;
+    var win = document.getElementById('cc-win');
+    var fab = document.getElementById('cc-fab');
+    win.style.display = isOpen ? 'flex' : 'none';
+    fab.textContent = isOpen ? '✕' : '🦞';
+    fab.style.fontSize = isOpen ? '20px' : '26px';
+    if (isOpen) {{
+      // Check if running on server (not file://)
+      var offline = window.location.protocol === 'file:';
+      document.getElementById('cc-offline').style.display = offline ? 'block' : 'none';
+      var input = document.getElementById('cc-input');
+      if (input) input.focus();
+    }}
+  }};
+
+  /* ── Keyboard shortcut: Enter to send ── */
+  document.addEventListener('DOMContentLoaded', function() {{
+    var inp = document.getElementById('cc-input');
+    if (inp) {{
+      inp.addEventListener('keydown', function(e) {{
+        if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); ccSend(); }}
+      }});
+    }}
+  }});
+
+  /* ── Append message bubble ── */
+  function addBubble(role, text, streaming) {{
+    var msgs = document.getElementById('cc-msgs');
+    var div = document.createElement('div');
+    div.className = 'cc-bubble ' + role + (streaming ? ' typing' : '');
+    div.textContent = text;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return div;
+  }}
+
+  /* ── Send ── */
+  window.ccSend = function() {{
+    if (isStreaming) return;
+    if (window.location.protocol === 'file:') return;
+    var inp = document.getElementById('cc-input');
+    var msg = (inp.value || '').trim();
+    if (!msg) return;
+    inp.value = '';
+
+    addBubble('user', msg, false);
+    history.push({{ role: 'user', content: msg }});
+
+    var aiBubble = addBubble('ai', '', true);
+    isStreaming = true;
+    var sendBtn = document.getElementById('cc-send');
+    if (sendBtn) sendBtn.disabled = true;
+
+    var fullText = '';
+
+    fetch('/api/chat/report', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ messages: history, context: CTX }})
+    }}).then(function(res) {{
+      if (!res.ok) {{
+        return res.text().then(function(t) {{
+          aiBubble.classList.remove('typing');
+          aiBubble.textContent = '请求失败：' + t;
+          isStreaming = false;
+          if (sendBtn) sendBtn.disabled = false;
+        }});
+      }}
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      function read() {{
+        reader.read().then(function(result) {{
+          if (result.done) {{
+            aiBubble.classList.remove('typing');
+            if (fullText) history.push({{ role: 'assistant', content: fullText }});
+            isStreaming = false;
+            if (sendBtn) sendBtn.disabled = false;
+            return;
+          }}
+          var chunk = decoder.decode(result.value, {{ stream: true }});
+          fullText += chunk;
+          aiBubble.textContent = fullText;
+          document.getElementById('cc-msgs').scrollTop = 9999;
+          read();
+        }}).catch(function(err) {{
+          aiBubble.classList.remove('typing');
+          aiBubble.textContent = fullText + '\n[读取中断：' + err + ']';
+          isStreaming = false;
+          if (sendBtn) sendBtn.disabled = false;
+        }});
+      }}
+      read();
+    }}).catch(function(err) {{
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = '网络错误：' + err;
+      isStreaming = false;
+      if (sendBtn) sendBtn.disabled = false;
+    }});
+  }};
+}})();
+</script>
 </body>
 </html>"""
         return html
