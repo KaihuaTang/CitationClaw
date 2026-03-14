@@ -982,4 +982,166 @@ function escHtml(s) {
             .replace(/"/g,'&quot;');
 }
 </script>
+
+<!-- ═══ CitationClaw UI Assistant Widget ═══ -->
+<style>
+#cc-ui-fab{position:fixed;right:24px;bottom:24px;width:52px;height:52px;border-radius:50%;
+  background:linear-gradient(135deg,#2563eb,#1e40af);border:none;cursor:pointer;
+  font-size:24px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 20px rgba(37,99,235,0.45);z-index:10000;
+  transition:transform .2s,box-shadow .2s;color:#fff}
+#cc-ui-fab:hover{transform:scale(1.1);box-shadow:0 6px 28px rgba(37,99,235,0.65)}
+#cc-ui-win{position:fixed;right:24px;bottom:88px;width:380px;height:500px;
+  background:#fff;border:1px solid #e2e8f0;border-radius:16px;
+  display:flex;flex-direction:column;z-index:9999;
+  box-shadow:0 12px 48px rgba(0,0,0,0.15);overflow:hidden;
+  animation:ccuiSlide .22s ease}
+@keyframes ccuiSlide{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+#cc-ui-header{display:flex;align-items:center;justify-content:space-between;
+  padding:13px 16px;background:linear-gradient(135deg,#2563eb,#1e40af);flex-shrink:0}
+#cc-ui-header-title{color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
+#cc-ui-header-sub{color:rgba(255,255,255,0.65);font-size:10px;margin-top:1px}
+#cc-ui-close{background:none;border:none;color:rgba(255,255,255,0.7);
+  cursor:pointer;font-size:18px;padding:0 2px;line-height:1}
+#cc-ui-close:hover{color:#fff}
+#cc-ui-msgs{flex:1;overflow-y:auto;padding:14px 14px 6px;display:flex;
+  flex-direction:column;gap:9px;scroll-behavior:smooth}
+#cc-ui-msgs::-webkit-scrollbar{width:4px}
+#cc-ui-msgs::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:2px}
+.cc-ui-bubble{max-width:88%;padding:9px 13px;border-radius:12px;
+  font-size:12.5px;line-height:1.6;word-break:break-word;white-space:pre-wrap}
+.cc-ui-bubble.user{align-self:flex-end;background:#2563eb;color:#fff;border-bottom-right-radius:3px}
+.cc-ui-bubble.ai{align-self:flex-start;background:#f7fafc;color:#2d3748;
+  border:1px solid #e2e8f0;border-bottom-left-radius:3px}
+.cc-ui-bubble.ai.typing::after{content:'▌';animation:ccuiBlink .7s step-end infinite}
+@keyframes ccuiBlink{0%,100%{opacity:1}50%{opacity:0}}
+#cc-ui-chips{display:flex;flex-wrap:wrap;gap:5px;padding:6px 12px;flex-shrink:0;
+  border-top:1px solid #f0f4f8}
+.cc-ui-chip{font-size:11px;padding:4px 10px;border:1px solid #bee3f8;
+  border-radius:20px;background:#ebf8ff;color:#2b6cb0;cursor:pointer;transition:background .15s}
+.cc-ui-chip:hover{background:#bee3f8}
+#cc-ui-input-row{display:flex;gap:8px;padding:10px 12px;
+  border-top:1px solid #e2e8f0;flex-shrink:0;background:#fff}
+#cc-ui-input{flex:1;border:1px solid #e2e8f0;border-radius:8px;
+  padding:8px 12px;color:#2d3748;font-size:12.5px;resize:none;
+  outline:none;transition:border-color .2s;font-family:inherit}
+#cc-ui-input:focus{border-color:#4299e1}
+#cc-ui-input::placeholder{color:#a0aec0}
+#cc-ui-send{background:#2563eb;border:none;border-radius:8px;
+  padding:8px 14px;color:#fff;font-size:12px;cursor:pointer;
+  flex-shrink:0;transition:opacity .2s;font-family:inherit}
+#cc-ui-send:hover{opacity:0.85}
+#cc-ui-send:disabled{opacity:0.4;cursor:default}
+</style>
+
+<button id="cc-ui-fab" onclick="ccuiToggle()" title="CitationClaw 使用助手">🦞</button>
+<div id="cc-ui-win" style="display:none">
+  <div id="cc-ui-header">
+    <div>
+      <div id="cc-ui-header-title">🦞 CitationClaw 使用助手</div>
+      <div id="cc-ui-header-sub">操作指引 · 常见问题</div>
+    </div>
+    <button id="cc-ui-close" onclick="ccuiToggle()">✕</button>
+  </div>
+  <div id="cc-ui-msgs">
+    <div class="cc-ui-bubble ai">你好！我是 CitationClaw 使用助手🦞<br>可以帮你了解如何配置、操作，以及解答常见问题。</div>
+  </div>
+  <div id="cc-ui-chips">
+    <span class="cc-ui-chip" onclick="ccuiAsk('如何配置 ScraperAPI？')">如何配置 ScraperAPI？</span>
+    <span class="cc-ui-chip" onclick="ccuiAsk('引用超过1000篇怎么办？')">超过1000篇怎么办？</span>
+    <span class="cc-ui-chip" onclick="ccuiAsk('各分析层级有什么区别？')">分析层级区别？</span>
+    <span class="cc-ui-chip" onclick="ccuiAsk('任务中断如何续爬？')">任务中断续爬？</span>
+  </div>
+  <div id="cc-ui-input-row">
+    <textarea id="cc-ui-input" rows="2" placeholder="问我如何使用 CitationClaw…（Enter 发送）"></textarea>
+    <button id="cc-ui-send" onclick="ccuiSend()">发送</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var isOpen = false, isStreaming = false, history = [];
+
+  window.ccuiToggle = function(){
+    isOpen = !isOpen;
+    var win = document.getElementById('cc-ui-win');
+    var fab = document.getElementById('cc-ui-fab');
+    win.style.display = isOpen ? 'flex' : 'none';
+    fab.textContent = isOpen ? '✕' : '🦞';
+    fab.style.fontSize = isOpen ? '18px' : '24px';
+    if (isOpen) { var inp = document.getElementById('cc-ui-input'); if(inp) inp.focus(); }
+  };
+
+  var inp = document.getElementById('cc-ui-input');
+  if (inp) inp.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); ccuiSend(); }
+  });
+
+  function addBubble(role, text, streaming){
+    var msgs = document.getElementById('cc-ui-msgs');
+    var div = document.createElement('div');
+    div.className = 'cc-ui-bubble ' + role + (streaming ? ' typing' : '');
+    div.textContent = text;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return div;
+  }
+
+  window.ccuiAsk = function(q){
+    document.getElementById('cc-ui-input').value = q;
+    ccuiSend();
+  };
+
+  window.ccuiSend = function(){
+    if (isStreaming) return;
+    var inp = document.getElementById('cc-ui-input');
+    var msg = (inp.value || '').trim();
+    if (!msg) return;
+    inp.value = '';
+    addBubble('user', msg, false);
+    history.push({role:'user', content:msg});
+    var aiBubble = addBubble('ai', '', true);
+    isStreaming = true;
+    var sendBtn = document.getElementById('cc-ui-send');
+    if (sendBtn) sendBtn.disabled = true;
+    var fullText = '';
+
+    fetch('/api/chat/ui', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({messages: history})
+    }).then(function(res){
+      if (!res.ok){ return res.text().then(function(t){
+        aiBubble.classList.remove('typing');
+        aiBubble.textContent = '请求失败：' + t;
+        isStreaming = false; if(sendBtn) sendBtn.disabled = false;
+      }); }
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      function read(){
+        reader.read().then(function(r){
+          if (r.done){
+            aiBubble.classList.remove('typing');
+            if (fullText) history.push({role:'assistant', content:fullText});
+            isStreaming = false; if(sendBtn) sendBtn.disabled = false; return;
+          }
+          fullText += decoder.decode(r.value, {stream:true});
+          aiBubble.textContent = fullText;
+          document.getElementById('cc-ui-msgs').scrollTop = 9999;
+          read();
+        }).catch(function(err){
+          aiBubble.classList.remove('typing');
+          aiBubble.textContent = fullText + '\n[中断：' + err + ']';
+          isStreaming = false; if(sendBtn) sendBtn.disabled = false;
+        });
+      }
+      read();
+    }).catch(function(err){
+      aiBubble.classList.remove('typing');
+      aiBubble.textContent = '网络错误：' + err;
+      isStreaming = false; if(sendBtn) sendBtn.disabled = false;
+    });
+  };
+})();
+</script>
 {% endblock %}

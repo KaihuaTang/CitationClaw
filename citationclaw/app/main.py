@@ -366,35 +366,148 @@ def _build_report_system_prompt(ctx: dict) -> str:
     return "\n".join(parts)
 
 
-@app.post("/api/chat/report")
-async def chat_report(request: ChatReportRequest):
-    """报告智能问答（流式返回）"""
+_UI_SYSTEM_PROMPT = """你是 CitationClaw🦞 使用助手，帮助用户操作 CitationClaw 学术引用分析工具。
+
+## CitationClaw 核心功能
+- 输入论文题目（或 Google Scholar 主页 URL）→ 自动爬取所有施引文献
+- 识别院士/Fellow 等知名学者，生成可视化 HTML 画像报告
+- 支持多篇论文批量分析、断点续爬、年份遍历模式（突破1000篇限制）
+
+## 关键配置
+- **ScraperAPI Key**：用于爬取 Google Scholar（免费账户有1000积分试用）
+- **LLM API Key + Base URL**：推荐 V-API，Search Model 必须支持实时 web search
+- **分析层级**：标准版（仅统计）/ 进阶版（院士才查引用原句）/ 全面版（所有施引文献查引用原句）
+
+## 常见问题
+- 请求失败/积分不足 → 检查 ScraperAPI Key 余额，建议配置3个以上轮换
+- LLM 编造学者信息 → Search Model 必须具备实时 web search 能力
+- 引用超过1000篇 → 开启年份遍历模式
+- 任务中断 → 设置 resume_page_count 为中断页码重新启动
+
+请简洁、准确地回答用户关于使用 CitationClaw 的问题，不要涉及报告数据内容。"""
+
+
+class ChatUIRequest(BaseModel):
+    """前端UI助手请求"""
+    messages: list  # [{"role": "user"|"assistant", "content": "..."}]
+
+
+@app.post("/api/chat/ui")
+async def chat_ui(request: ChatUIRequest):
+    """前端操作引导助手（轻量级，流式返回）"""
     config = config_manager.get()
     if not config.openai_api_key or not config.openai_base_url:
         return JSONResponse(status_code=400,
-                            content={"error": "未配置 LLM API，请先在配置页填写 API Key 和 Base URL"})
+                            content={"error": "未配置 LLM API"})
 
-    system_prompt = _build_report_system_prompt(request.context)
-    messages_to_send = [{"role": "system", "content": system_prompt}] + [
+    messages_to_send = [{"role": "system", "content": _UI_SYSTEM_PROMPT}] + [
         {"role": m["role"], "content": m["content"]} for m in request.messages
     ]
-    model = config.dashboard_model  # nothinking 轻量模型
 
     def _stream():
         try:
             from openai import OpenAI
             client = OpenAI(api_key=config.openai_api_key,
-                            base_url=config.openai_base_url,
-                            timeout=60.0)
+                            base_url=config.openai_base_url, timeout=60.0)
             stream = client.chat.completions.create(
-                model=model,
+                model=config.dashboard_model,
                 messages=messages_to_send,
-                stream=True,
-                max_tokens=1500,
+                stream=True, max_tokens=800,
             )
             for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+        except Exception as e:
+            yield f"\n\n[错误：{e}]"
+
+    return StreamingResponse(_stream(), media_type="text/plain; charset=utf-8")
+
+
+@app.post("/api/chat/report")
+async def chat_report(request: ChatReportRequest):
+    """报告智能问答：轻量级为主，自动识别需联网搜索的问题并切换模型（流式返回）
+
+    流式协议：
+      - 普通回答：直接流式文本
+      - 需要搜索：先发送 "__SEARCHING__\\n"，再流式发送最终答案
+    """
+    config = config_manager.get()
+    if not config.openai_api_key or not config.openai_base_url:
+        return JSONResponse(status_code=400,
+                            content={"error": "未配置 LLM API"})
+
+    system_prompt = _build_report_system_prompt(request.context)
+    history = [{"role": m["role"], "content": m["content"]} for m in request.messages]
+    last_user_msg = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+
+    light_model  = config.dashboard_model   # nothinking 轻量
+    search_model = config.openai_model      # 带 web search 能力的模型
+
+    def _stream():
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=config.openai_api_key,
+                            base_url=config.openai_base_url, timeout=90.0)
+
+            # ── Step 1: 分类器 —— 判断是否需要联网搜索 ──────────────────────
+            needs_search = False
+            if search_model and search_model != light_model:
+                try:
+                    cls_resp = client.chat.completions.create(
+                        model=light_model,
+                        messages=[
+                            {"role": "system",
+                             "content": "判断用户问题是否需要联网搜索才能回答（报告中未包含的实时信息、最新研究动态等）。只回答 Y 或 N，不要其他内容。"},
+                            {"role": "user", "content": last_user_msg},
+                        ],
+                        stream=False, max_tokens=3,
+                    )
+                    verdict = (cls_resp.choices[0].message.content or "").strip().upper()
+                    needs_search = verdict.startswith("Y")
+                except Exception:
+                    needs_search = False
+
+            if needs_search:
+                # ── Step 2a: 搜索模型获取原始答案 ────────────────────────────
+                yield "__SEARCHING__\n"
+                try:
+                    search_resp = client.chat.completions.create(
+                        model=search_model,
+                        messages=[{"role": "system", "content": system_prompt}] + history,
+                        stream=False, max_tokens=2000,
+                    )
+                    raw_answer = search_resp.choices[0].message.content or ""
+                except Exception as e:
+                    raw_answer = f"（搜索失败：{e}）"
+
+                # ── Step 2b: 轻量模型整理搜索结果（流式） ───────────────────
+                summarize_msgs = [
+                    {"role": "system", "content": system_prompt},
+                    *history[:-1],
+                    {"role": "user",
+                     "content": (f"用户问：{last_user_msg}\n\n"
+                                 f"联网搜索结果如下，请结合报告数据，用简洁专业的语言综合作答：\n\n{raw_answer}")},
+                ]
+                stream = client.chat.completions.create(
+                    model=light_model,
+                    messages=summarize_msgs,
+                    stream=True, max_tokens=1200,
+                )
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+
+            else:
+                # ── Step 2b: 轻量模型直接回答（流式） ───────────────────────
+                stream = client.chat.completions.create(
+                    model=light_model,
+                    messages=[{"role": "system", "content": system_prompt}] + history,
+                    stream=True, max_tokens=1500,
+                )
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+
         except Exception as e:
             yield f"\n\n[错误：{e}]"
 

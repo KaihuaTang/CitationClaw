@@ -2522,22 +2522,54 @@ new Chart(document.getElementById('cTrend'), {{
       }}
       var reader = res.body.getReader();
       var decoder = new TextDecoder('utf-8');
+      var searchIndicator = null;
+      var buf = '';
+      var searchHandled = false;
+
+      function ensureSearchIndicator() {{
+        if (!searchIndicator) {{
+          searchIndicator = document.createElement('div');
+          searchIndicator.style.cssText = 'font-size:11px;color:rgba(99,179,237,0.8);padding:4px 0;';
+          searchIndicator.textContent = '🔍 正在联网搜索…';
+          aiBubble.parentNode.insertBefore(searchIndicator, aiBubble);
+        }}
+      }}
+      function removeSearchIndicator() {{
+        if (searchIndicator) {{ searchIndicator.remove(); searchIndicator = null; }}
+      }}
+
       function read() {{
         reader.read().then(function(result) {{
           if (result.done) {{
             aiBubble.classList.remove('typing');
+            removeSearchIndicator();
             if (fullText) history.push({{ role: 'assistant', content: fullText }});
             isStreaming = false;
             if (sendBtn) sendBtn.disabled = false;
             return;
           }}
           var chunk = decoder.decode(result.value, {{ stream: true }});
-          fullText += chunk;
-          aiBubble.textContent = fullText;
+          if (!searchHandled) {{
+            buf += chunk;
+            if (buf.indexOf('__SEARCHING__') !== -1) {{
+              searchHandled = true;
+              ensureSearchIndicator();
+              var rest = buf.replace('__SEARCHING__\n', '').replace('__SEARCHING__', '');
+              if (rest) {{ fullText += rest; aiBubble.textContent = fullText; }}
+            }} else if (buf.length > 30) {{
+              searchHandled = true;
+              fullText += buf; aiBubble.textContent = fullText; buf = '';
+            }}
+          }} else {{
+            removeSearchIndicator();
+            fullText += chunk;
+            aiBubble.textContent = fullText;
+          }}
           document.getElementById('cc-msgs').scrollTop = 9999;
           read();
         }}).catch(function(err) {{
           aiBubble.classList.remove('typing');
+          removeSearchIndicator();
           aiBubble.textContent = fullText + '\n[读取中断：' + err + ']';
           isStreaming = false;
           if (sendBtn) sendBtn.disabled = false;
