@@ -6,15 +6,15 @@
 让每一次引用都成为可解释的影响力  
 <em>Turning Every Citation into Explainable Impact</em>
 
-  [![🌐 项目主页](https://img.shields.io/badge/🌐-项目主页-blue?style=flat-square)](https://visionxlab.github.io/CitationClaw/)
-  [![PyPI](https://img.shields.io/pypi/v/citationclaw?style=flat-square&logo=pypi&logoColor=white&color=0073b7)](https://pypi.org/project/citationclaw/)
+  [![🌐 项目主页](https://img.shields.io/badge/🌐-项目主页-blue)](https://visionxlab.github.io/CitationClaw/)
+  [![PyPI](https://img.shields.io/pypi/v/citationclaw?logo=pypi&logoColor=white&color=0073b7)](https://pypi.org/project/citationclaw/)
   [![PyPI-下载量](https://img.shields.io/pypi/dm/citationclaw)](https://pypi.org/project/citationclaw)
-  ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
-  ![Version](https://img.shields.io/badge/版本-1.0-brightgreen?style=flat-square)
-  ![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)
-  ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?style=flat-square&logo=openai&logoColor=white)
-  ![ScraperAPI](https://img.shields.io/badge/爬取-ScraperAPI-FF6B35?style=flat-square)
-  [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square)](https://creativecommons.org/licenses/by-nc/4.0/)
+  ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+  ![Version](https://img.shields.io/badge/版本-1.0-brightgreen)
+  ![Platform](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+  ![LLM](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?logo=openai&logoColor=white)
+  ![ScraperAPI](https://img.shields.io/badge/爬取-ScraperAPI-FF6B35)
+  [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 **输入论文题目或者从谷歌学术主页选择论文，一键获得完整的被引分析报告。**<br>
 自动爬取所有施引文献、识别引用学者背景，最终生成一份精美的可视化 HTML 画像报告，用于了解自己/他人的被引情况。
