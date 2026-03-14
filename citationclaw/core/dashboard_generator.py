@@ -1539,7 +1539,7 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
                 "title": _ct[:80], "year": None, "citations": None,
                 "link": "", "country": "", "institution": "",
             })
-        _center_id = "c0"
+        _n_centers = len(canonical_titles or []) or 1
         for _i, _p in enumerate(kg_paper_list):
             kg_nodes.append({
                 "id": f"p{_i}", "type": "paper",
@@ -1550,8 +1550,16 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
                 "country": _p.get("country", ""),
                 "institution": (_p.get("institution") or "")[:55],
             })
-        kg_links = [{"source": f"p{_i}", "target": _center_id}
-                    for _i in range(len(kg_paper_list))]
+        # Each citing paper links to ALL center nodes
+        kg_links = []
+        for _i in range(len(kg_paper_list)):
+            for _ci in range(_n_centers):
+                kg_links.append({"source": f"p{_i}", "target": f"c{_ci}"})
+        # Connect center nodes to each other
+        for _ci in range(_n_centers - 1):
+            for _cj in range(_ci + 1, _n_centers):
+                kg_links.append({"source": f"c{_ci}", "target": f"c{_cj}",
+                                 "center_edge": True})
         kg_data_json = json.dumps({"nodes": kg_nodes, "links": kg_links},
                                   ensure_ascii=False)
 
@@ -1683,32 +1691,63 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
     return 5 + Math.pow(cit / Math.max(maxCit, 1), 0.42) * 25;
   }
 
+  /* ── Fix center nodes at symmetric positions ── */
+  var centerNodes = data.nodes.filter(function(n) { return n.type === 'center'; });
+  var nC = centerNodes.length;
+  var cx = W / 2, cy = H / 2;
+  var centerSpread = Math.min(W, H) * 0.22;
+  centerNodes.forEach(function(n, i) {
+    var angle = (2 * Math.PI * i / nC) - Math.PI / 2;
+    n.fx = nC === 1 ? cx : cx + centerSpread * Math.cos(angle);
+    n.fy = nC === 1 ? cy : cy + centerSpread * Math.sin(angle);
+    n.x  = n.fx; n.y = n.fy;
+  });
+  /* centroid of centers (for radial force anchor) */
+  var rcx = centerNodes.reduce(function(s, n) { return s + n.fx; }, 0) / Math.max(nC, 1);
+  var rcy = centerNodes.reduce(function(s, n) { return s + n.fy; }, 0) / Math.max(nC, 1);
+
   /* ── Force simulation ── */
   var sim = d3.forceSimulation(data.nodes)
     .force('link', d3.forceLink(data.links)
       .id(function(d) { return d.id; })
       .distance(function(d) {
         var src = typeof d.source === 'object' ? d.source : {};
+        var tgt = typeof d.target === 'object' ? d.target : {};
+        if (src.type === 'center' && tgt.type === 'center') return centerSpread * 2;
         var cit = src.citations || 0;
         return 95 + (1 - Math.pow(cit / Math.max(maxCit, 1), 0.38)) * 150;
       })
-      .strength(0.28))
+      .strength(function(d) {
+        var src = typeof d.source === 'object' ? d.source : {};
+        var tgt = typeof d.target === 'object' ? d.target : {};
+        return (src.type === 'center' && tgt.type === 'center') ? 1 : 0.28;
+      }))
     .force('charge', d3.forceManyBody().strength(function(d) {
-      return d.type === 'center' ? -700 : -45;
+      return d.type === 'center' ? -500 : -45;
     }))
-    .force('center', d3.forceCenter(W / 2, H / 2).strength(0.05))
+    .force('center', d3.forceCenter(cx, cy).strength(0.04))
     .force('radial', d3.forceRadial(function(d) {
       if (d.type === 'center') return 0;
       var t = d.year ? Math.max(0, Math.min(1, (d.year - minY) / Math.max(maxY - minY, 1))) : 0.5;
       return 90 + t * 210;
-    }, W / 2, H / 2).strength(0.18))
+    }, rcx, rcy).strength(0.18))
     .force('collision', d3.forceCollide().radius(function(d) {
       return nodeRadius(d) + 4;
     }).strength(0.75))
     .alphaDecay(0.013);
 
   /* ── Links ── */
-  var link = g.append('g').selectAll('line').data(data.links).join('line')
+  var paperLinks  = data.links.filter(function(l) { return !l.center_edge; });
+  var centerLinks = data.links.filter(function(l) { return  l.center_edge; });
+
+  /* center-to-center edges: thick dashed */
+  var centerLink = g.append('g').selectAll('line').data(centerLinks).join('line')
+    .attr('stroke', 'rgba(66,153,225,0.55)')
+    .attr('stroke-width', 2)
+    .attr('stroke-dasharray', '6,4');
+
+  /* paper-to-center edges: thin */
+  var link = g.append('g').selectAll('line').data(paperLinks).join('line')
     .attr('stroke', 'rgba(66,153,225,0.09)')
     .attr('stroke-width', 0.85);
 
@@ -1846,11 +1885,14 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
 
   /* ── Tick ── */
   sim.on('tick', function() {
-    link
-      .attr('x1', function(d) { return d.source.x; })
-      .attr('y1', function(d) { return d.source.y; })
-      .attr('x2', function(d) { return d.target.x; })
-      .attr('y2', function(d) { return d.target.y; });
+    function setLine(sel) {
+      sel.attr('x1', function(d) { return d.source.x; })
+         .attr('y1', function(d) { return d.source.y; })
+         .attr('x2', function(d) { return d.target.x; })
+         .attr('y2', function(d) { return d.target.y; });
+    }
+    setLine(link);
+    setLine(centerLink);
     node.attr('transform', function(d) {
       return 'translate(' + d.x + ',' + d.y + ')';
     });
