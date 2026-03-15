@@ -26,6 +26,7 @@ class AuthorSearcher:
         debug_mode: bool = False,
         target_paper_authors: Optional[str] = None,
         author_cache: Optional[AuthorInfoCache] = None,
+        cancel_event: Optional[asyncio.Event] = None,
     ):
         """
         作者学术信息搜索器
@@ -85,6 +86,7 @@ class AuthorSearcher:
 
         # 作者信息持久化缓存
         self.author_cache: Optional[AuthorInfoCache] = author_cache
+        self.cancel_event: Optional[asyncio.Event] = cancel_event
 
         # 自引检测 Prompt（使用轻量级模型）
         self.self_citation_check_prompt = (
@@ -163,7 +165,7 @@ class AuthorSearcher:
             "7. 若无法找到任何可信来源，请明确说明\"未检索到可信来源支持该信息\"，禁止基于推测补充信息。"
         )
 
-    async def search_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
+    async def search_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "", quota_retry_count: int = 0) -> str:
         """
         调用搜索模型（启用web搜索）
 
@@ -201,9 +203,14 @@ class AuthorSearcher:
 
             # 检查是否是配额限制错误
             if 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg:
-                self.log_callback("⚠️ API配额超限,等待60秒后重试...")
+                if quota_retry_count >= 3:
+                    self.log_callback("❌ API配额持续不足，已停止重试。")
+                    if self.cancel_event:
+                        self.cancel_event.set()
+                    return 'ERROR'
+                self.log_callback(f"⚠️ API配额超限，60秒后重试（第{quota_retry_count + 1}/3次）...")
                 await asyncio.sleep(60)
-                return await self.search_fn(query, retry_count, max_retries)
+                return await self.search_fn(query, retry_count, max_retries, log_prefix, quota_retry_count + 1)
 
             # 其他错误（包括超时）- 使用指数退避重试
             is_timeout = 'timed out' in error_msg or 'timeout' in error_msg
@@ -218,7 +225,7 @@ class AuthorSearcher:
                     self.log_callback(f"❌ 搜索API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def chat_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
+    async def chat_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "", quota_retry_count: int = 0) -> str:
         """
         调用对话模型（不启用web搜索，用于二次筛选）
 
@@ -253,9 +260,14 @@ class AuthorSearcher:
 
             # 检查是否是配额限制错误
             if 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg:
-                self.log_callback("⚠️ API配额超限,等待60秒后重试...")
+                if quota_retry_count >= 3:
+                    self.log_callback("❌ API配额持续不足，已停止重试。")
+                    if self.cancel_event:
+                        self.cancel_event.set()
+                    return 'ERROR'
+                self.log_callback(f"⚠️ API配额超限，60秒后重试（第{quota_retry_count + 1}/3次）...")
                 await asyncio.sleep(60)
-                return await self.chat_fn(query, retry_count, max_retries)
+                return await self.chat_fn(query, retry_count, max_retries, log_prefix, quota_retry_count + 1)
 
             # 其他错误（包括超时）- 使用指数退避重试
             is_timeout = 'timed out' in error_msg or 'timeout' in error_msg
@@ -270,7 +282,7 @@ class AuthorSearcher:
                     self.log_callback(f"❌ 二次筛选API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def format_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
+    async def format_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "", quota_retry_count: int = 0) -> str:
         """
         调用格式输出模型（不启用web搜索，用于输出JSON）
 
@@ -307,9 +319,14 @@ class AuthorSearcher:
 
             # 检查是否是配额限制错误
             if 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg:
-                self.log_callback("⚠️ API配额超限,等待60秒后重试...")
+                if quota_retry_count >= 3:
+                    self.log_callback("❌ API配额持续不足，已停止重试。")
+                    if self.cancel_event:
+                        self.cancel_event.set()
+                    return 'ERROR'
+                self.log_callback(f"⚠️ API配额超限，60秒后重试（第{quota_retry_count + 1}/3次）...")
                 await asyncio.sleep(60)
-                return await self.format_fn(query, retry_count, max_retries)
+                return await self.format_fn(query, retry_count, max_retries, log_prefix, quota_retry_count + 1)
 
             # 其他错误（包括超时）- 使用指数退避重试
             is_timeout = 'timed out' in error_msg or 'timeout' in error_msg
@@ -324,7 +341,7 @@ class AuthorSearcher:
                     self.log_callback(f"❌ 格式化输出重量级学者API错误（已达最大重试次数）: {e}")
                 return 'ERROR'
 
-    async def verify_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "") -> str:
+    async def verify_fn(self, query: str, retry_count: int = 0, max_retries: int = 5, log_prefix: str = "", quota_retry_count: int = 0) -> str:
         """
         调用校验模型（启用web搜索，用于作者信息真实性校验）
 
@@ -360,9 +377,14 @@ class AuthorSearcher:
 
             # 检查是否是配额限制错误
             if 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg:
-                self.log_callback("⚠️ API配额超限,等待60秒后重试...")
+                if quota_retry_count >= 3:
+                    self.log_callback("❌ API配额持续不足，已停止重试。")
+                    if self.cancel_event:
+                        self.cancel_event.set()
+                    return 'ERROR'
+                self.log_callback(f"⚠️ API配额超限，60秒后重试（第{quota_retry_count + 1}/3次）...")
                 await asyncio.sleep(60)
-                return await self.verify_fn(query, retry_count, max_retries)
+                return await self.verify_fn(query, retry_count, max_retries, log_prefix, quota_retry_count + 1)
 
             # 其他错误（包括超时）- 使用指数退避重试
             is_timeout = 'timed out' in error_msg or 'timeout' in error_msg
@@ -383,6 +405,7 @@ class AuthorSearcher:
         searched_affiliation: str,
         retry_count: int = 0,
         max_retries: int = 3,
+        quota_retry_count: int = 0,
     ) -> bool:
         """用轻量级LLM判断施引论文是否为自引。
 
@@ -409,9 +432,15 @@ class AuthorSearcher:
         except Exception as e:
             error_msg = str(e).lower()
             if 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg:
+                if quota_retry_count >= 3:
+                    self.log_callback("❌ API配额持续不足，已停止重试。")
+                    if self.cancel_event:
+                        self.cancel_event.set()
+                    return False
+                self.log_callback(f"⚠️ API配额超限，60秒后重试（第{quota_retry_count + 1}/3次）...")
                 await asyncio.sleep(60)
                 return await self._check_self_citation_llm(
-                    authors_with_profile, searched_affiliation, retry_count, max_retries
+                    authors_with_profile, searched_affiliation, retry_count, max_retries, quota_retry_count + 1
                 )
             if retry_count < max_retries:
                 wait_time = min(2 ** retry_count, 15)
@@ -441,6 +470,8 @@ class AuthorSearcher:
             (count, record_dict) 元组
         """
         async with semaphore:
+            if self.cancel_event and self.cancel_event.is_set():
+                return (count, {})
             paper_title = paper_content['paper_title']
             paper_link  = paper_content['paper_link']
             log_prefix  = f"[{count}/{total_papers}] "
