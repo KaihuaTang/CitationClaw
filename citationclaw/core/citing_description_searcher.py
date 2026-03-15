@@ -19,6 +19,7 @@ class CitingDescriptionSearcher:
         log_callback: Callable,
         progress_callback: Callable,
         cache: Optional[CitingDescriptionCache] = None,
+        cancel_event: Optional[asyncio.Event] = None,
     ):
         http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
@@ -34,6 +35,7 @@ class CitingDescriptionSearcher:
         self.log = log_callback
         self.progress = progress_callback
         self.cache = cache
+        self.cancel_event = cancel_event
         self._authors_cache: dict[str, str] = {}
         self._authors_locks: dict[str, asyncio.Lock] = {}
 
@@ -48,7 +50,15 @@ class CitingDescriptionSearcher:
                 )
                 return comp.choices[0].message.content or ""
             except Exception as e:
-                is_timeout = 'timed out' in str(e).lower() or 'timeout' in str(e).lower()
+                error_msg = str(e).lower()
+                is_timeout = 'timed out' in error_msg or 'timeout' in error_msg
+                is_quota = 'rate' in error_msg or 'quota' in error_msg or 'limit' in error_msg
+
+                if is_quota:
+                    if self.cancel_event and not self.cancel_event.is_set():
+                        self.log(f"{log_prefix}❌ API配额持续不足，已停止重试。")
+                        self.cancel_event.set()
+                    return "NONE"
                 if i < retries - 1:
                     if i == 0 and not is_timeout:
                         self.log(f"{log_prefix}⚠️ 搜索API错误: {e}，正在启用重试机制，请耐心等待！")
@@ -118,6 +128,8 @@ class CitingDescriptionSearcher:
             nonlocal completed
             async with sem:
                 if cancel_check and cancel_check():
+                    return idx, ""
+                if self.cancel_event and self.cancel_event.is_set():
                     return idx, ""
                 # 自引论文跳过引用描述搜索
                 is_self = row.get('Is_Self_Citation', False)
