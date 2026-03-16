@@ -614,6 +614,9 @@ class TaskExecutor:
                             seen_links.add(dedup_key)
                             out_f.write(_json.dumps(outer, ensure_ascii=False) + "\n")
 
+                if merged_file.stat().st_size == 0:
+                    self.log_manager.warning("⚠️ 合并后 JSONL 为空（所有记录均被去重或过滤），Phase 3 将生成空输出文件")
+
                 # —— Phase 3：导出 ——
                 self.log_manager.info("▶ Phase 3: 导出结果")
                 excel_file = result_dir / f"{output_prefix}_results.xlsx"

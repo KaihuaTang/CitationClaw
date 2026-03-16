@@ -81,8 +81,25 @@ class ResultExporter:
         self.log_callback("正在加载数据...")
 
         # 读取JSONL文件
+        if not input_file.exists():
+            self.log_callback(f"⚠️ 输入文件不存在: {input_file}，将生成空输出文件")
+            excel_output.parent.mkdir(parents=True, exist_ok=True)
+            json_output.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame().to_excel(excel_output, index=False)
+            with open(json_output, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False)
+            return
+
+        data = []
         with open(input_file, 'r', encoding='utf-8') as f:
-            data = [json.loads(line) for line in f]
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    self.log_callback(f"⚠️ 跳过损坏的 JSON 行: {line[:80]}")
 
         # 展平数据结构
         flattened = []
