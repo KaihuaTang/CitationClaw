@@ -200,7 +200,7 @@ class DashboardGenerator:
         seen_citing = set()
         unique_citing_papers = []
         for cp in citing_pairs:
-            name = cp["citing_paper"].strip()
+            name = cp["paper_title"].strip()   # citing paper title (Paper_Title column)
             if name and name not in seen_citing:
                 seen_citing.add(name)
                 unique_citing_papers.append(name)
@@ -1141,15 +1141,21 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
             if desc and desc.upper() not in ("NONE", "NAN", "N/A", "NA", "") and desc not in desc_lookup[pt]:
                 desc_lookup[pt].append(desc)
 
-        # ── Citing papers list
-        unique_citing_papers = unique_citing_papers or []
-        n_citing = len(unique_citing_papers)
+        # ── Citing papers list — always show ALL citing papers (from papers), not just those with descriptions
+        n_citing = total_papers
+        SCOPE_MAX = 100  # cap display list to avoid oversized HTML
         citing_list_items = ""
-        for i, name in enumerate(unique_citing_papers):
+        for i, p in enumerate(papers[:SCOPE_MAX]):
             citing_list_items += f"""
         <div class="citing-paper-item">
           <span class="citing-paper-num">{str(i+1).zfill(2)}</span>
-          <span class="citing-paper-name">{name}</span>
+          <span class="citing-paper-name">{p["title"]}</span>
+        </div>"""
+        if total_papers > SCOPE_MAX:
+            citing_list_items += f"""
+        <div class="citing-paper-item" style="opacity:0.55;font-style:italic">
+          <span class="citing-paper-num">…</span>
+          <span class="citing-paper-name">另有 {total_papers - SCOPE_MAX} 篇，完整数据见下载文件</span>
         </div>"""
 
         # ── Download bar
@@ -2021,7 +2027,7 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
     <div class="citing-papers-header-divider"></div>
   </div>
   <div class="citing-papers-desc">
-    以下论文均为主动引用目标论文的施引文献，本报告所有多维画像分析均基于这 <strong>{n_citing}</strong> 篇论文展开。
+    以下论文均为主动引用目标论文的施引文献，本报告所有多维画像分析均基于全部 <strong>{n_citing}</strong> 篇施引文献展开。
   </div>
   <div class="citing-papers-grid">
     {citing_list_items}
