@@ -17,7 +17,7 @@ class CitationDescriptionSkill:
         parallel_workers = kwargs.get("parallel_workers", config.parallel_author_search)
         quota_event = kwargs.get("quota_event")
 
-        desc_cache = CitingDescriptionCache()
+        desc_cache = kwargs.get("desc_cache") or CitingDescriptionCache()
         desc_searcher = CitingDescriptionSearcher(
             api_key=config.openai_api_key,
             base_url=config.openai_base_url,

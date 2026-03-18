@@ -278,6 +278,33 @@ async def run_pipeline(request: RunRequest):
     return {"status": "success", "message": f"已启动，共 {len(groups)} 篇论文（含 {total} 个搜索标题）"}
 
 
+class FromCacheRequest(BaseModel):
+    paper_title: str
+    output_prefix: str = "cached"
+
+
+@app.post("/api/run/from-cache")
+async def run_from_cache(request: FromCacheRequest):
+    """从缓存直接生成 Phase 5 报告，跳过 Phase 1–4"""
+    if task_executor.is_running:
+        return JSONResponse(status_code=400,
+            content={"status": "error", "message": "任务运行中，请等待"})
+
+    if not request.paper_title.strip():
+        return JSONResponse(status_code=400,
+            content={"status": "error", "message": "请输入论文标题"})
+
+    config = config_manager.get()
+    task_executor.current_task = asyncio.create_task(
+        task_executor.build_report_from_cache(
+            paper_title=request.paper_title.strip(),
+            config=config,
+            output_prefix=request.output_prefix or "cached",
+        )
+    )
+    return {"status": "success", "message": f"已启动缓存报告生成: {request.paper_title.strip()}"}
+
+
 class ScholarProfileRequest(BaseModel):
     profile_url: str
 

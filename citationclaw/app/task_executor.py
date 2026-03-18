@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
 from citationclaw.core.author_cache import AuthorInfoCache
+from citationclaw.core.citing_description_cache import CitingDescriptionCache
 from citationclaw.app.log_manager import LogManager
 from citationclaw.app.config_manager import AppConfig
 from citationclaw.app.cost_tracker import CostTracker
@@ -371,6 +372,10 @@ class TaskExecutor:
         # 初始化费用追踪器
         cost_tracker = CostTracker()
 
+        # 初始化持久化缓存（在 try 外，确保 finally 可访问）
+        author_cache = None
+        desc_cache = None
+
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             result_dir = Path(f"data/result-{timestamp}")
@@ -410,6 +415,7 @@ class TaskExecutor:
 
             # 作者信息持久化缓存（跨运行复用）
             author_cache = AuthorInfoCache()
+            desc_cache = CitingDescriptionCache()
             cache_stats = author_cache.stats()
             self.log_manager.info(
                 f"💾 作者信息缓存已加载：{cache_stats['total_entries']} 条历史记录"
@@ -776,6 +782,7 @@ class TaskExecutor:
                             output_excel=_phase4_output,
                             parallel_workers=config.parallel_author_search,
                             quota_event=self.quota_exceeded_event,
+                            desc_cache=desc_cache,
                         )
                         if self.quota_exceeded_event.is_set():
                             self._handle_quota_exceeded()
@@ -881,6 +888,162 @@ class TaskExecutor:
 
         except Exception as e:
             self.log_manager.error(f"任务错误: {e}")
+            import traceback; self.log_manager.error(traceback.format_exc())
+            raise
+        finally:
+            self.is_running = False
+            if author_cache is not None:
+                try:
+                    await author_cache.flush()
+                except Exception:
+                    pass
+            if desc_cache is not None:
+                try:
+                    await desc_cache.flush()
+                except Exception:
+                    pass
+
+    async def build_report_from_cache(self, paper_title: str, config, output_prefix: str = "cached") -> dict:
+        """
+        从缓存直接生成 Phase 5 HTML 报告，跳过 Phase 1–4。
+
+        Args:
+            paper_title: 被引论文标题（用于过滤 desc 缓存）
+            config:      AppConfig 实例
+            output_prefix: 输出文件前缀
+
+        Returns:
+            {"html": str, "excel": str}
+        """
+        import json as _json
+        import pandas as pd
+        from citationclaw.core.exporter import ResultExporter
+
+        self.is_running = True
+        self.should_cancel = False
+
+        try:
+            self.log_manager.info("=" * 50)
+            self.log_manager.info(f"📂 从缓存生成报告: {paper_title}")
+            self.log_manager.info("=" * 50)
+
+            # 加载 desc 缓存
+            desc_cache_file = Path("data/cache/citing_description_cache.json")
+            if not desc_cache_file.exists():
+                self.log_manager.error("❌ 引用描述缓存不存在: data/cache/citing_description_cache.json")
+                return {}
+            desc_data: dict = _json.loads(desc_cache_file.read_text(encoding="utf-8"))
+
+            # 过滤出目标论文的所有引用记录
+            target_suffix = "||" + paper_title.strip().lower()
+            matches = {k: v for k, v in desc_data.items() if k.lower().endswith(target_suffix)}
+            if not matches:
+                self.log_manager.warning(f"⚠️ 缓存中未找到论文「{paper_title}」的任何引用记录")
+                return {}
+            self.log_manager.info(f"📊 找到 {len(matches)} 条引用记录")
+
+            # 加载 author 缓存
+            author_cache_file = Path("data/cache/author_info_cache.json")
+            author_data: dict = {}
+            if author_cache_file.exists():
+                try:
+                    author_data = _json.loads(author_cache_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+            # 构建行数据
+            rows = []
+            for key, entry in matches.items():
+                paper_link = key[:key.lower().rfind(target_suffix)]
+                paper_title_citing = entry.get("paper_title", "")
+                citing_desc = entry.get("Citing_Description", "")
+
+                # 查找作者信息：先按 link，再 fallback 到标题
+                author_entry = author_data.get(paper_link) or author_data.get(paper_title_citing.strip().lower(), {})
+
+                row = {
+                    "Paper_Title": paper_title_citing,
+                    "Paper_Link": paper_link,
+                    "Paper_Year": author_entry.get("Paper_Year", ""),
+                    "Citations": author_entry.get("Citations", ""),
+                    "Citing_Paper": paper_title,
+                    "Is_Self_Citation": False,
+                    "Citing_Description": citing_desc,
+                    "Searched Author-Affiliation": author_entry.get("Searched Author-Affiliation", ""),
+                    "First_Author_Institution": author_entry.get("First_Author_Institution", ""),
+                    "First_Author_Country": author_entry.get("First_Author_Country", ""),
+                    "Searched Author Information": author_entry.get("Searched Author Information", ""),
+                    "Renowned Scholar": author_entry.get("Renowned Scholar", ""),
+                    "Formated Renowned Scholar": author_entry.get("Formated Renowned Scholar", []),
+                }
+                rows.append(row)
+
+            df = pd.DataFrame(rows)
+
+            # 创建输出目录
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            result_dir = Path(f"data/result-{timestamp}")
+            result_dir.mkdir(parents=True, exist_ok=True)
+            self.log_manager.info(f"📁 结果目录: {result_dir}")
+
+            # 保存主 Excel（Phase 5 输入）
+            citing_desc_excel = result_dir / f"{output_prefix}_results_with_citing_desc.xlsx"
+            df.to_excel(citing_desc_excel, index=False)
+            self.log_manager.info(f"📊 已保存引用描述 Excel: {citing_desc_excel}")
+
+            # 重建知名学者文件
+            all_renowned = citing_desc_excel.with_stem(citing_desc_excel.stem + "_all_renowned_scholar")
+            top_renowned = citing_desc_excel.with_stem(citing_desc_excel.stem + "_top-tier_scholar")
+            exporter = ResultExporter(log_callback=self.log_manager.info)
+            flattened = df.to_dict("records")
+            try:
+                exporter.highligh_renowned_scholar(flattened, [all_renowned, top_renowned])
+                self.log_manager.info("🏆 已重建知名学者文件")
+            except Exception as exc:
+                self.log_manager.warning(f"⚠️ 知名学者文件重建失败（将使用空表）: {exc}")
+                empty = pd.DataFrame()
+                empty.to_excel(all_renowned, index=False)
+                empty.to_excel(top_renowned, index=False)
+
+            # 运行 Phase 5
+            self.log_manager.info("▶ Phase 5: 生成 HTML 画像报告")
+            html_file = result_dir / f"{output_prefix}_dashboard.html"
+
+            def _fwd(p: Path) -> str:
+                return str(p).replace("\\", "/")
+
+            await self._run_skill(
+                "phase5_report_generate",
+                config,
+                citing_desc_excel=citing_desc_excel,
+                renowned_all_xlsx=all_renowned,
+                renowned_top_xlsx=top_renowned,
+                output_html=html_file,
+                canonical_titles=[paper_title],
+                download_filenames={
+                    "excel": _fwd(citing_desc_excel),
+                    "all_renowned": _fwd(all_renowned),
+                    "top_renowned": _fwd(top_renowned),
+                },
+                skip_citing_analysis=config.dashboard_skip_citing_analysis,
+            )
+
+            self.log_manager.success("=" * 50)
+            self.log_manager.success("✅ 缓存报告生成完成!")
+            self.log_manager.success(f"📊 Dashboard: {html_file}")
+            self.log_manager.success("=" * 50)
+
+            await self.log_manager._broadcast({"type": "all_done", "data": {
+                "excel": str(citing_desc_excel),
+                "json": None,
+                "dashboard": str(html_file),
+                "cost_summary": None,
+            }})
+
+            return {"html": str(html_file), "excel": str(citing_desc_excel)}
+
+        except Exception as e:
+            self.log_manager.error(f"缓存报告生成错误: {e}")
             import traceback; self.log_manager.error(traceback.format_exc())
             raise
         finally:

@@ -212,6 +212,20 @@
   </button>
 </div>
 
+<!-- From-Cache Shortcut -->
+<div style="border:1px solid var(--border-color,#e5e7eb);border-radius:8px;padding:12px 14px;margin-bottom:16px;background:var(--surface-secondary,#f9fafb)">
+  <div style="font-size:12px;font-weight:600;color:var(--text-secondary,#6b7280);margin-bottom:8px;letter-spacing:.02em">
+    <i class="bi bi-database-check" style="margin-right:4px"></i>从缓存直接生成报告（跳过 Phase 1–4）
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <input id="idx-cache-title" type="text" placeholder="输入已缓存的论文标题…"
+      style="flex:1;padding:7px 10px;border:1px solid var(--border-color,#d1d5db);border-radius:6px;font-size:13px;background:var(--surface,#fff);color:var(--text-primary,#111)" />
+    <button id="idx-cache-run-btn" class="btn-agent-secondary" style="white-space:nowrap;padding:7px 14px;font-size:13px">
+      <i class="bi bi-lightning-charge-fill"></i> 生成报告
+    </button>
+  </div>
+</div>
+
 <!-- Progress -->
 <div id="idx-progress-section" style="display:none;" class="agent-progress-wrap">
   <div class="agent-progress-header">

@@ -57,9 +57,13 @@ class ResultExporter:
                     })
 
         scholar_df = pd.DataFrame(scholar_df)
-        scholar_df = tag_scholar(scholar_df)
-
-        selected_df = scholar_df[scholar_df['两院院士/其他院士/Fellow'] != ''].reset_index(drop=True)
+        if scholar_df.empty:
+            scholar_df = pd.DataFrame(columns=['Name','Institution','Country','Job','Title',
+                'PaperTitle','PaperCitations','PaperYear','PaperLink','CitingPaper','两院院士/其他院士/Fellow'])
+            selected_df = scholar_df.copy()
+        else:
+            scholar_df = tag_scholar(scholar_df)
+            selected_df = scholar_df[scholar_df['两院院士/其他院士/Fellow'] != ''].reset_index(drop=True)
 
         scholar_df.to_excel(renowned_scholar_excel_outputs[0], sheet_name='All Renowned scholars', index=False)
         selected_df.to_excel(renowned_scholar_excel_outputs[1], sheet_name='Top-tier scholars', index=False)

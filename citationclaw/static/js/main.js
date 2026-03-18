@@ -842,9 +842,57 @@ function initIndexPage() {
         runBtn.disabled = false;
         runBtn.innerHTML = '<i class="bi bi-play-fill"></i> 开始分析';
         document.getElementById('idx-cancel-btn').style.display = 'none';
+        resetCacheRunBtn();
         const thinking = document.getElementById('rp-thinking-indicator');
         if (thinking) thinking.classList.remove('active');
         stopRunTimer();
+    }
+
+    // 从缓存生成报告按钮
+    const cacheRunBtn = document.getElementById('idx-cache-run-btn');
+    if (cacheRunBtn) {
+        cacheRunBtn.addEventListener('click', async () => {
+            const titleInput = document.getElementById('idx-cache-title');
+            const paperTitle = titleInput ? titleInput.value.trim() : '';
+            if (!paperTitle) {
+                alert('请输入论文标题');
+                return;
+            }
+
+            cacheRunBtn.disabled = true;
+            cacheRunBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="animation:spin .8s linear infinite"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40" stroke-dashoffset="10"/></svg>&nbsp; 生成中...';
+
+            document.getElementById('idx-progress-section').style.display = 'block';
+            document.getElementById('idx-log-section').style.display = 'block';
+            document.getElementById('idx-log-container').innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/run/from-cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paper_title: paperTitle, output_prefix: 'cached' })
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    alert(data.message || '启动失败');
+                    cacheRunBtn.disabled = false;
+                    cacheRunBtn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> 生成报告';
+                    return;
+                }
+                // WS already connected; progress/logs will stream automatically
+            } catch (e) {
+                alert('请求失败: ' + e.message);
+                cacheRunBtn.disabled = false;
+                cacheRunBtn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> 生成报告';
+            }
+        });
+    }
+
+    function resetCacheRunBtn() {
+        if (cacheRunBtn) {
+            cacheRunBtn.disabled = false;
+            cacheRunBtn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> 生成报告';
+        }
     }
 
     // 检测当前 phase
