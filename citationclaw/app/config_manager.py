@@ -114,7 +114,7 @@ class AppConfig(BaseModel):
     enable_dashboard: bool = Field(default=True, description="是否生成 HTML 画像报告（Phase 5）")
 
     # 服务分层
-    service_tier: str = Field(default="full", description="服务层级预置: full/advanced/basic")
+    service_tier: str = Field(default="basic", description="服务层级预置: full/advanced/basic")
     citing_description_scope: str = Field(default="all",
         description="Phase 4 引用描述搜索范围: all=全部, renowned_only=仅院士/Fellow, specified_only=仅指定学者")
     skip_author_search: bool = Field(default=False, description="是否跳过 Phase 2+3（作者搜索和导出）")
