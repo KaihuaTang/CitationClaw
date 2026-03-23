@@ -1208,9 +1208,10 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
         SCOPE_MAX = 200      # hard cap on DOM nodes to avoid huge HTML
         citing_list_items = ""
         for i, p in enumerate(papers[:SCOPE_MAX]):
-            hidden = ' class="scope-extra" style="display:none"' if i >= SCOPE_VISIBLE else ''
+            extra_cls = " scope-extra" if i >= SCOPE_VISIBLE else ""
+            extra_style = ' style="display:none"' if i >= SCOPE_VISIBLE else ""
             citing_list_items += f"""
-        <div class="citing-paper-item"{hidden}>
+        <div class="citing-paper-item{extra_cls}"{extra_style}>
           <span class="citing-paper-num">{str(i+1).zfill(2)}</span>
           <span class="citing-paper-name">{p["title"]}</span>
         </div>"""
