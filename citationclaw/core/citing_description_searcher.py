@@ -2,12 +2,15 @@
 Phase 4: 批量搜索每篇引用论文对目标论文的引用描述
 """
 import asyncio
+import logging
 import pandas as pd
 from pathlib import Path
 from typing import Callable, Optional
 from openai import AsyncOpenAI
 import httpx
 from citationclaw.core.citing_description_cache import CitingDescriptionCache
+
+logger = logging.getLogger(__name__)
 
 
 class CitingDescriptionSearcher:
@@ -21,14 +24,14 @@ class CitingDescriptionSearcher:
         cache: Optional[CitingDescriptionCache] = None,
         cancel_event: Optional[asyncio.Event] = None,
     ):
-        http_client = httpx.AsyncClient(
+        self._http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
             timeout=30.0
         )
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
-            http_client=http_client,
+            http_client=self._http_client,
             max_retries=2,
         )
         self.model = model
@@ -38,6 +41,10 @@ class CitingDescriptionSearcher:
         self.cancel_event = cancel_event
         self._authors_cache: dict[str, str] = {}
         self._authors_locks: dict[str, asyncio.Lock] = {}
+
+    async def close(self):
+        """关闭底层 httpx 客户端，释放连接池资源。"""
+        await self._http_client.aclose()
 
     async def _search_fn(self, query: str, retries: int = 3, log_prefix: str = "") -> str:
         """调用搜索API（启用web_search_options）"""
@@ -142,6 +149,9 @@ class CitingDescriptionSearcher:
         df['Citing_Description'] = ''
         semaphore = asyncio.Semaphore(parallel_workers)
         completed = 0
+        # FIX: Use an asyncio.Lock for the completed counter to ensure
+        # monotonic progress display under concurrent updates.
+        completed_lock = asyncio.Lock()
 
         async def process_row(idx, row, sem):
             nonlocal completed
@@ -153,32 +163,40 @@ class CitingDescriptionSearcher:
                 # 自引论文跳过引用描述搜索
                 is_self = row.get('Is_Self_Citation', False)
                 if is_self and str(is_self).lower() not in ('false', '0', 'nan', 'none', ''):
-                    completed += 1
-                    self.progress(completed, total)
+                    async with completed_lock:
+                        completed += 1
+                        current = completed
+                    self.progress(current, total)
                     return idx, "自引，已跳过引用描述搜索"
                 target = str(row.get('Citing_Paper', '') or '')
                 citing_title = str(row.get('Paper_Title', '') or '')
                 citing_url = str(row.get('Paper_Link', '') or '')
                 if not target or not citing_title:
-                    completed += 1
-                    self.progress(completed, total)
+                    async with completed_lock:
+                        completed += 1
+                        current = completed
+                    self.progress(current, total)
                     return idx, ""
                 # 命中缓存则直接返回，跳过 LLM 调用
                 if self.cache is not None:
                     cached = self.cache.get(citing_url, citing_title, target)
                     if cached is not None:
-                        completed += 1
-                        self.progress(completed, total)
-                        self.log(f"[{completed}/{total}] 缓存命中，跳过搜索: {citing_title[:40]}...")
+                        async with completed_lock:
+                            completed += 1
+                            current = completed
+                        self.progress(current, total)
+                        self.log(f"[{current}/{total}] 缓存命中，跳过搜索: {citing_title[:40]}...")
                         return idx, cached
                 log_prefix = f"[{idx + 1}/{total}] "
                 desc = await self._find_description(target, citing_title, citing_url, log_prefix=log_prefix)
-                # 写入缓存（包括 "NONE" / "自引" 等结果，避免重复搜索）
-                if self.cache is not None:
+                # FIX: Don't cache 'NONE' sentinels to allow retry on next run
+                if self.cache is not None and desc != "NONE":
                     await self.cache.update(citing_url, citing_title, target, desc)
-                completed += 1
-                self.progress(completed, total)
-                self.log(f"[{completed}/{total}] 引用描述搜索完成: {citing_title[:40]}...")
+                async with completed_lock:
+                    completed += 1
+                    current = completed
+                self.progress(current, total)
+                self.log(f"[{current}/{total}] 引用描述搜索完成: {citing_title[:40]}...")
                 return idx, desc
 
         tasks = [
@@ -187,12 +205,20 @@ class CitingDescriptionSearcher:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for item in results:
-            if not isinstance(item, Exception):
+            if isinstance(item, Exception):
+                # FIX: Log exceptions instead of silently filtering them out
+                logger.error("引用描述搜索任务异常: %s", item, exc_info=item)
+                self.log(f"⚠️ 引用描述搜索任务异常: {item}")
+            else:
                 i, desc = item
                 df.at[i, 'Citing_Description'] = desc
 
         if self.cache is not None:
             await self.cache.flush()
+
+        # FIX: Clean up _authors_locks after search completes
+        self._authors_locks.clear()
+
         output_excel.parent.mkdir(parents=True, exist_ok=True)
         df.to_excel(output_excel, index=False)
         self.log(f"引用描述已保存: {output_excel}")

@@ -248,7 +248,7 @@ var GlobalProgress = (function () {
 
 // ==================== Shared Utility ====================
 function escapeHtml(unsafe) {
-    return unsafe
+    return String(unsafe)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
@@ -256,10 +256,45 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
+// ==================== Safe Fetch Helper ====================
+async function safeFetch(url, opts = {}) {
+    const resp = await fetch(url, opts);
+    if (!resp.ok) {
+        const text = await resp.text().catch(() => resp.statusText);
+        throw new Error(`HTTP ${resp.status}: ${text}`);
+    }
+    return resp;
+}
+
+// ==================== API Key Check (moved from index.html) ====================
+window.checkApiKeysAndAlert = function(needScraper, needLLM) {
+    const scraperKeys = (document.getElementById('idx-scraper-keys')?.value || '')
+        .split(',').map(k => k.trim()).filter(Boolean);
+    const openaiKey = (document.getElementById('idx-openai-key')?.value || '').trim();
+    const missing = [];
+    if (needScraper && scraperKeys.length === 0) missing.push('ScraperAPI Key（用于抓取 Google Scholar）');
+    if (needLLM && !openaiKey) missing.push('LLM API Key（用于学者信息搜索与报告生成）');
+    if (missing.length === 0) return true;
+    var modalMissing = document.getElementById('api-key-modal-missing');
+    if (modalMissing) {
+        modalMissing.innerHTML = missing.map(m => '<li>' + escapeHtml(m) + '</li>').join('');
+    }
+    var modalEl = document.getElementById('api-key-modal');
+    if (modalEl) new bootstrap.Modal(modalEl).show();
+    return false;
+};
+
+window.scrollToApiConfig = function() {
+    var modalEl = document.getElementById('api-key-modal');
+    if (modalEl) bootstrap.Modal.getInstance(modalEl)?.hide();
+    var card = document.getElementById('api-config-card');
+    if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
+};
+
 // ==================== Config Panel Functions (module scope) ====================
 async function loadConfig() {
     try {
-        const response = await fetch('/api/config');
+        const response = await safeFetch('/api/config');
         const config = await response.json();
 
         const el = id => document.getElementById(id);
@@ -310,7 +345,7 @@ async function loadConfig() {
 
 async function checkExistingFiles() {
     try {
-        const response = await fetch('/api/results/list');
+        const response = await safeFetch('/api/results/list');
         const files = await response.json();
 
         const jsonlFiles = files.filter(f => f.type === '.jsonl');
@@ -327,7 +362,7 @@ async function checkExistingFiles() {
                 recentFiles.map(f => {
                     const date = new Date(f.modified * 1000).toLocaleString('zh-CN');
                     const size = (f.size / 1024).toFixed(1);
-                    return `<li><code>${f.name}</code> (${size} KB, ${date})</li>`;
+                    return `<li><code>${escapeHtml(f.name)}</code> (${size} KB, ${date})</li>`;
                 }).join('') +
                 '</ul>';
 
@@ -347,15 +382,21 @@ async function loadResults() {
 }
 
 function _resultsSetLoading(show) {
-    document.getElementById('loading-indicator').style.display = show ? 'block' : 'none';
+    var el = document.getElementById('loading-indicator');
+    if (el) el.style.display = show ? 'block' : 'none';
 }
 function _resultsShowView(view) {
     // view: 'empty' | 'folders' | 'files'
-    document.getElementById('empty-state').style.display = view === 'empty' ? 'block' : 'none';
-    document.getElementById('results-folder-view').style.display = view === 'folders' ? 'block' : 'none';
-    document.getElementById('results-file-view').style.display = view === 'files' ? 'block' : 'none';
-    document.getElementById('results-back-btn').style.display = view === 'files' ? 'inline-flex' : 'none';
-    document.getElementById('results-panel-title').textContent = view === 'files'
+    var emptyEl = document.getElementById('empty-state');
+    var folderEl = document.getElementById('results-folder-view');
+    var fileEl = document.getElementById('results-file-view');
+    var backBtn = document.getElementById('results-back-btn');
+    var titleEl = document.getElementById('results-panel-title');
+    if (emptyEl) emptyEl.style.display = view === 'empty' ? 'block' : 'none';
+    if (folderEl) folderEl.style.display = view === 'folders' ? 'block' : 'none';
+    if (fileEl) fileEl.style.display = view === 'files' ? 'block' : 'none';
+    if (backBtn) backBtn.style.display = view === 'files' ? 'inline-flex' : 'none';
+    if (titleEl) titleEl.textContent = view === 'files'
         ? (window._resultCurrentFolderDisplay || '文件夹内容')
         : '结果文件夹';
 }
@@ -364,7 +405,7 @@ async function resultsShowFolders() {
     _resultsSetLoading(true);
     _resultsShowView('empty');
     try {
-        const res = await fetch('/api/results/folders');
+        const res = await safeFetch('/api/results/folders');
         const folders = await res.json();
         _resultsSetLoading(false);
         if (folders.length === 0) {
@@ -376,16 +417,18 @@ async function resultsShowFolders() {
         folders.forEach(folder => {
             const date = new Date(folder.modified * 1000).toLocaleString('zh-CN');
             const sizeMB = (folder.size / 1024 / 1024).toFixed(2);
+            const safeName = escapeHtml(folder.name);
+            const safeDisplay = escapeHtml(folder.display_name);
             const item = document.createElement('div');
             item.className = 'list-group-item d-flex align-items-center gap-3 py-3';
             item.innerHTML = `
                 <i class="bi bi-folder2 fs-4 text-warning flex-shrink-0"></i>
-                <div class="flex-grow-1 min-width-0" style="cursor:pointer" data-folder="${folder.name}" data-display="${folder.display_name}">
-                    <div class="fw-semibold text-truncate">${folder.display_name}</div>
-                    <small class="text-muted">${folder.file_count} 个文件 &nbsp;·&nbsp; ${sizeMB} MB &nbsp;·&nbsp; ${date}</small>
+                <div class="flex-grow-1 min-width-0" style="cursor:pointer" data-folder="${safeName}" data-display="${safeDisplay}">
+                    <div class="fw-semibold text-truncate">${safeDisplay}</div>
+                    <small class="text-muted">${escapeHtml(String(folder.file_count))} 个文件 &nbsp;·&nbsp; ${sizeMB} MB &nbsp;·&nbsp; ${date}</small>
                 </div>
-                <i class="bi bi-chevron-right text-muted flex-shrink-0" style="cursor:pointer" data-folder="${folder.name}" data-display="${folder.display_name}"></i>
-                <button class="btn btn-sm btn-outline-danger flex-shrink-0 ms-1" data-delete="${folder.name}" title="删除此文件夹">
+                <i class="bi bi-chevron-right text-muted flex-shrink-0" style="cursor:pointer" data-folder="${safeName}" data-display="${safeDisplay}"></i>
+                <button class="btn btn-sm btn-outline-danger flex-shrink-0 ms-1" data-delete="${safeName}" title="删除此文件夹">
                     <i class="bi bi-trash"></i>
                 </button>
             `;
@@ -398,8 +441,7 @@ async function resultsShowFolders() {
                 const name = e.currentTarget.dataset.delete;
                 if (!confirm(`确定要删除文件夹 "${name}" 及其所有文件吗？此操作不可撤销。`)) return;
                 try {
-                    const r = await fetch(`/api/results/folder/${encodeURIComponent(name)}`, { method: 'DELETE' });
-                    if (!r.ok) throw new Error(await r.text());
+                    const r = await safeFetch(`/api/results/folder/${encodeURIComponent(name)}`, { method: 'DELETE' });
                     await resultsShowFolders();
                 } catch (err) {
                     alert('删除失败：' + err.message);
@@ -420,7 +462,7 @@ async function resultsOpenFolder(folderName, displayName) {
     _resultsSetLoading(true);
     _resultsShowView('empty');
     try {
-        const res = await fetch(`/api/results/list?folder=${encodeURIComponent(folderName)}`);
+        const res = await safeFetch(`/api/results/list?folder=${encodeURIComponent(folderName)}`);
         const files = await res.json();
         _resultsSetLoading(false);
         const table = document.getElementById('results-table');
@@ -433,24 +475,27 @@ async function resultsOpenFolder(folderName, displayName) {
             const date = new Date(file.modified * 1000).toLocaleString('zh-CN');
             const icon = file.type === '.xlsx' ? 'excel' :
                          file.type === '.html' ? 'richtext' : 'code';
+            const safePath = escapeHtml(file.path);
+            const safeName = escapeHtml(file.name);
             const actionBtn = file.type === '.html'
-                ? `<a href="/api/results/view/${file.path}" target="_blank" class="btn btn-sm btn-primary">
+                ? `<a href="/api/results/view/${safePath}" target="_blank" class="btn btn-sm btn-primary">
                        <i class="bi bi-eye"></i> 查看报告
                    </a>`
-                : `<a href="/api/results/download/${file.path}" class="btn btn-sm btn-outline-primary" download>
+                : `<a href="/api/results/download/${safePath}" class="btn btn-sm btn-outline-primary" download>
                        <i class="bi bi-download"></i> 下载
                    </a>`;
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><i class="bi bi-file-earmark-${icon}"></i> ${file.name}</td>
-                <td><span class="badge bg-${typeClass}">${file.type}</span></td>
+                <td><i class="bi bi-file-earmark-${icon}"></i> ${safeName}</td>
+                <td><span class="badge bg-${typeClass}">${escapeHtml(file.type)}</span></td>
                 <td>${size} KB</td>
                 <td>${date}</td>
                 <td>${actionBtn}</td>
             `;
             table.appendChild(row);
         });
-        document.getElementById('file-count').textContent = files.length;
+        var fileCountEl = document.getElementById('file-count');
+        if (fileCountEl) fileCountEl.textContent = files.length;
         _resultsShowView('files');
     } catch (err) {
         console.error('加载文件夹内容失败:', err);
@@ -460,42 +505,43 @@ async function resultsOpenFolder(folderName, displayName) {
 }
 
 function collectConfig() {
+    const el = id => document.getElementById(id);
     return {
-        scraper_api_keys: document.getElementById('scraper-api-keys').value
+        scraper_api_keys: (el('scraper-api-keys')?.value || '')
             .split(',').map(k => k.trim()).filter(k => k),
-        openai_api_key: document.getElementById('openai-api-key').value,
-        openai_base_url: document.getElementById('openai-base-url').value,
-        openai_model: document.getElementById('openai-model').value,
-        default_output_prefix: document.getElementById('output-prefix').value,
-        sleep_between_pages: parseInt(document.getElementById('sleep-between-pages').value) || 10,
-        parallel_author_search: parseInt(document.getElementById('parallel-author-search').value) || 10,
-        resume_page_count: parseInt(document.getElementById('resume-page').value) || 0,
-        enable_year_traverse: document.getElementById('enable-year-traverse')?.checked ?? false,
-        debug_mode: document.getElementById('debug-mode').checked,
-        test_mode: document.getElementById('test-mode').checked,
-        retry_max_attempts: parseInt(document.getElementById('retry-max-attempts').value) || 3,
-        retry_intervals: document.getElementById('retry-intervals').value || '5,10,20',
-        scraper_premium: document.getElementById('scraper-premium').checked,
-        scraper_ultra_premium: document.getElementById('scraper-ultra-premium').checked,
-        scraper_session: document.getElementById('scraper-session').checked,
-        scholar_no_filter: document.getElementById('scholar-no-filter').checked,
-        scraper_geo_rotate: document.getElementById('scraper-geo-rotate').checked,
-        author_search_prompt1: document.getElementById('author-search-prompt1').value,
-        author_search_prompt2: document.getElementById('author-search-prompt2').value,
-        enable_renowned_scholar_filter: document.getElementById('enable-renowned-scholar').checked,
-        renowned_scholar_model: document.getElementById('renowned-scholar-model').value,
-        renowned_scholar_prompt: document.getElementById('renowned-scholar-prompt').value,
-        enable_author_verification: document.getElementById('enable-author-verification').checked,
-        author_verify_model: document.getElementById('author-verify-model').value,
-        author_verify_prompt: document.getElementById('author-verify-prompt').value,
-        api_access_token: document.getElementById('api-access-token').value,
-        api_user_id: document.getElementById('api-user-id').value
+        openai_api_key: el('openai-api-key')?.value || '',
+        openai_base_url: el('openai-base-url')?.value || '',
+        openai_model: el('openai-model')?.value || '',
+        default_output_prefix: el('output-prefix')?.value || 'paper',
+        sleep_between_pages: parseInt(el('sleep-between-pages')?.value) || 10,
+        parallel_author_search: parseInt(el('parallel-author-search')?.value) || 10,
+        resume_page_count: parseInt(el('resume-page')?.value) || 0,
+        enable_year_traverse: el('enable-year-traverse')?.checked ?? false,
+        debug_mode: el('debug-mode')?.checked || false,
+        test_mode: el('test-mode')?.checked || false,
+        retry_max_attempts: parseInt(el('retry-max-attempts')?.value) || 3,
+        retry_intervals: el('retry-intervals')?.value || '5,10,20',
+        scraper_premium: el('scraper-premium')?.checked || false,
+        scraper_ultra_premium: el('scraper-ultra-premium')?.checked || false,
+        scraper_session: el('scraper-session')?.checked || false,
+        scholar_no_filter: el('scholar-no-filter')?.checked || false,
+        scraper_geo_rotate: el('scraper-geo-rotate')?.checked || false,
+        author_search_prompt1: el('author-search-prompt1')?.value || '',
+        author_search_prompt2: el('author-search-prompt2')?.value || '',
+        enable_renowned_scholar_filter: el('enable-renowned-scholar')?.checked || false,
+        renowned_scholar_model: el('renowned-scholar-model')?.value || '',
+        renowned_scholar_prompt: el('renowned-scholar-prompt')?.value || '',
+        enable_author_verification: el('enable-author-verification')?.checked || false,
+        author_verify_model: el('author-verify-model')?.value || '',
+        author_verify_prompt: el('author-verify-prompt')?.value || '',
+        api_access_token: el('api-access-token')?.value || '',
+        api_user_id: el('api-user-id')?.value || ''
     };
 }
 
 async function saveConfigNow() {
     const config = collectConfig();
-    const response = await fetch('/api/config', {
+    const response = await safeFetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
@@ -535,9 +581,12 @@ function initIndexPage() {
     function _syncApiKeyType(input) {
         input.type = input.value ? 'password' : 'text';
     }
-    document.getElementById('idx-openai-key').addEventListener('input', function () {
-        _syncApiKeyType(this);
-    });
+    var openaiKeyEl = document.getElementById('idx-openai-key');
+    if (openaiKeyEl) {
+        openaiKeyEl.addEventListener('input', function () {
+            _syncApiKeyType(this);
+        });
+    }
 
     // Phase label 映射
     const phaseLabels = {
@@ -553,64 +602,75 @@ function initIndexPage() {
     // 加载配置并填充 Home 面板表单
     (async () => {
         try {
-            const resp = await fetch('/api/config');
+            const resp = await safeFetch('/api/config');
             const cfg = await resp.json();
             const el = id => document.getElementById(id);
-            el('idx-scraper-keys').value = (cfg.scraper_api_keys || []).join(',');
-            el('idx-openai-key').value = cfg.openai_api_key || '';
-            _syncApiKeyType(el('idx-openai-key'));
-            el('idx-openai-url').value = cfg.openai_base_url || '';
-            el('idx-openai-model').value = cfg.openai_model || '';
-            el('idx-output-prefix').value = cfg.default_output_prefix || 'paper';
-            el('idx-renowned-scholar').checked = cfg.enable_renowned_scholar_filter !== false;
-            el('idx-author-verify').checked = cfg.enable_author_verification || false;
-            el('idx-dashboard').checked = cfg.enable_dashboard !== false;
-            el('idx-service-tier').value = cfg.service_tier || 'basic';
-            el('idx-dashboard-model').value = cfg.dashboard_model || 'gemini-3-flash-preview-nothinking';
-            el('idx-api-access-token').value = cfg.api_access_token || '';
-            el('idx-api-user-id').value = cfg.api_user_id || '';
+            if (el('idx-scraper-keys')) el('idx-scraper-keys').value = (cfg.scraper_api_keys || []).join(',');
+            if (el('idx-openai-key')) {
+                el('idx-openai-key').value = cfg.openai_api_key || '';
+                _syncApiKeyType(el('idx-openai-key'));
+            }
+            if (el('idx-openai-url')) el('idx-openai-url').value = cfg.openai_base_url || '';
+            if (el('idx-openai-model')) el('idx-openai-model').value = cfg.openai_model || '';
+            if (el('idx-output-prefix')) el('idx-output-prefix').value = cfg.default_output_prefix || 'paper';
+            if (el('idx-renowned-scholar')) el('idx-renowned-scholar').checked = cfg.enable_renowned_scholar_filter !== false;
+            if (el('idx-author-verify')) el('idx-author-verify').checked = cfg.enable_author_verification || false;
+            if (el('idx-dashboard')) el('idx-dashboard').checked = cfg.enable_dashboard !== false;
+            if (el('idx-service-tier')) el('idx-service-tier').value = cfg.service_tier || 'basic';
+            if (el('idx-dashboard-model')) el('idx-dashboard-model').value = cfg.dashboard_model || 'gemini-3-flash-preview-nothinking';
+            if (el('idx-api-access-token')) el('idx-api-access-token').value = cfg.api_access_token || '';
+            if (el('idx-api-user-id')) el('idx-api-user-id').value = cfg.api_user_id || '';
         } catch (e) {
             console.error('加载配置失败:', e);
         }
     })();
 
-    // 保存配置按钮
-    document.getElementById('idx-save-config-btn').addEventListener('click', async () => {
-        await saveIndexConfig();
-    });
+    // 保存配置按钮 (with debounce)
+    let _homeSaveTimeout = null;
+    var saveCfgBtn = document.getElementById('idx-save-config-btn');
+    if (saveCfgBtn) {
+        saveCfgBtn.addEventListener('click', async () => {
+            clearTimeout(_homeSaveTimeout);
+            _homeSaveTimeout = setTimeout(() => saveIndexConfig(), 300);
+        });
+    }
 
+    // saveIndexConfig race lock
+    let _savingConfig = false;
     async function saveIndexConfig() {
-        const el = id => document.getElementById(id);
-        const keys = el('idx-scraper-keys').value.split(',').map(k => k.trim()).filter(k => k);
-        const body = {
-            scraper_api_keys: keys,
-            openai_api_key: el('idx-openai-key').value,
-            openai_base_url: el('idx-openai-url').value,
-            openai_model: el('idx-openai-model').value,
-            default_output_prefix: el('idx-output-prefix').value,
-            enable_renowned_scholar_filter: el('idx-renowned-scholar').checked,
-            enable_author_verification: el('idx-author-verify').checked,
-            enable_dashboard: el('idx-dashboard').checked,
-            service_tier: el('idx-service-tier').value,
-            skip_author_search: false,
-            // Derive citing-description settings directly from tier to ensure consistency
-            ...({
-                basic:    { enable_citing_description: false, citing_description_scope: 'all',           dashboard_skip_citing_analysis: true  },
-                advanced: { enable_citing_description: true,  citing_description_scope: 'renowned_only', dashboard_skip_citing_analysis: false },
-                full:     { enable_citing_description: true,  citing_description_scope: 'all',           dashboard_skip_citing_analysis: false },
-            }[el('idx-service-tier').value]),
-            dashboard_model: el('idx-dashboard-model').value,
-            api_access_token: el('idx-api-access-token').value,
-            api_user_id: el('idx-api-user-id').value,
-        };
+        if (_savingConfig) return;
+        _savingConfig = true;
         try {
-            const cfgResp = await fetch('/api/config');
+            const el = id => document.getElementById(id);
+            const keys = (el('idx-scraper-keys')?.value || '').split(',').map(k => k.trim()).filter(k => k);
+            const body = {
+                scraper_api_keys: keys,
+                openai_api_key: el('idx-openai-key')?.value || '',
+                openai_base_url: el('idx-openai-url')?.value || '',
+                openai_model: el('idx-openai-model')?.value || '',
+                default_output_prefix: el('idx-output-prefix')?.value || 'paper',
+                enable_renowned_scholar_filter: el('idx-renowned-scholar')?.checked || false,
+                enable_author_verification: el('idx-author-verify')?.checked || false,
+                enable_dashboard: el('idx-dashboard')?.checked || false,
+                service_tier: el('idx-service-tier')?.value || 'basic',
+                skip_author_search: false,
+                // Derive citing-description settings directly from tier to ensure consistency
+                ...({
+                    basic:    { enable_citing_description: false, citing_description_scope: 'all',           dashboard_skip_citing_analysis: true  },
+                    advanced: { enable_citing_description: true,  citing_description_scope: 'renowned_only', dashboard_skip_citing_analysis: false },
+                    full:     { enable_citing_description: true,  citing_description_scope: 'all',           dashboard_skip_citing_analysis: false },
+                }[el('idx-service-tier')?.value || 'basic']),
+                dashboard_model: el('idx-dashboard-model')?.value || '',
+                api_access_token: el('idx-api-access-token')?.value || '',
+                api_user_id: el('idx-api-user-id')?.value || '',
+            };
+            const cfgResp = await safeFetch('/api/config');
             const existing = await cfgResp.json();
             // 费用追踪字段：空值不覆盖已有配置
             if (!body.api_access_token && existing.api_access_token) delete body.api_access_token;
             if (!body.api_user_id && existing.api_user_id) delete body.api_user_id;
             const merged = Object.assign({}, existing, body);
-            const resp = await fetch('/api/config', {
+            const resp = await safeFetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(merged)
@@ -618,11 +678,15 @@ function initIndexPage() {
             const data = await resp.json();
             if (data.status === 'success') {
                 const ind = document.getElementById('idx-save-indicator');
-                ind.style.opacity = '1';
-                setTimeout(() => { ind.style.opacity = '0'; }, 2000);
+                if (ind) {
+                    ind.style.opacity = '1';
+                    setTimeout(() => { ind.style.opacity = '0'; }, 2000);
+                }
             }
         } catch (e) {
             console.error('保存配置失败:', e);
+        } finally {
+            _savingConfig = false;
         }
     }
 
@@ -631,46 +695,87 @@ function initIndexPage() {
     let PRESETS = {};
     (async () => {
         try {
-            const resp = await fetch('/api/presets');
+            const resp = await safeFetch('/api/presets');
             PRESETS = await resp.json();
         } catch (e) { console.error('Failed to load presets:', e); }
     })();
 
-    tierSelect.addEventListener('change', () => {
-        const tier = tierSelect.value;
-        const preset = PRESETS[tier];
-        if (!preset) return;
-        const sw = preset.switches;
-        document.getElementById('idx-renowned-scholar').checked = sw.enable_renowned_scholar_filter;
-        document.getElementById('idx-dashboard').checked = sw.enable_dashboard;
-    });
+    if (tierSelect) {
+        tierSelect.addEventListener('change', () => {
+            const tier = tierSelect.value;
+            const preset = PRESETS[tier];
+            if (!preset) return;
+            const sw = preset.switches;
+            var rs = document.getElementById('idx-renowned-scholar');
+            var db = document.getElementById('idx-dashboard');
+            if (rs) rs.checked = sw.enable_renowned_scholar_filter;
+            if (db) db.checked = sw.enable_dashboard;
+        });
+    }
+
+    // Stuck-button timeout: if no all_done within 30s of last log, show prompt
+    let _lastLogTime = 0;
+    let _stuckTimer = null;
+
+    function resetStuckTimer() {
+        _lastLogTime = Date.now();
+        if (_stuckTimer) clearTimeout(_stuckTimer);
+        _stuckTimer = setTimeout(() => {
+            if (runBtn.disabled) {
+                appendIndexLog({
+                    timestamp: new Date().toISOString(),
+                    level: 'WARNING',
+                    message: '超过 30 秒未收到新消息，任务可能已结束或遇到问题。请检查服务端状态或尝试取消重试。'
+                });
+            }
+        }, 30000);
+    }
 
     // WebSocket 事件监听
     ws.on('log', log => {
         appendIndexLog(log);
+        resetStuckTimer();
         // Show global progress on any log activity
         GlobalProgress.show(currentPhase);
     });
     ws.on('history', logs => logs.forEach(log => appendIndexLog(log)));
     ws.on('progress', progress => {
         updateIndexProgress(progress);
+        resetStuckTimer();
         // Update global progress bar
         GlobalProgress.show(currentPhase, progress.percentage || 0);
     });
     ws.on('all_done', data => {
+        if (_stuckTimer) clearTimeout(_stuckTimer);
         stopRunTimer();
         showIndexResults(data);
         // Hide global progress after 3 seconds
         setTimeout(() => { GlobalProgress.hide(); }, 3000);
     });
 
+    // task_error handler: reset button on server-side errors
+    ws.on('task_error', data => {
+        if (_stuckTimer) clearTimeout(_stuckTimer);
+        stopRunTimer();
+        resetRunBtn();
+        GlobalProgress.hide();
+        appendIndexLog({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            message: (data && data.message) ? data.message : '任务执行出错，请检查日志后重试。'
+        });
+    });
+
     ws.on('year_traverse_prompt', data => {
-        document.getElementById('yt-citation-count').textContent =
-            (data.citation_count || 0).toLocaleString();
-        const ytModal = new bootstrap.Modal(document.getElementById('yearTraverseModal'));
+        var ytCountEl = document.getElementById('yt-citation-count');
+        if (ytCountEl) ytCountEl.textContent = (data.citation_count || 0).toLocaleString();
+        var ytModalEl = document.getElementById('yearTraverseModal');
+        if (!ytModalEl) return;
+        const ytModal = new bootstrap.Modal(ytModalEl);
         ytModal.show();
 
-        document.getElementById('yt-btn-enable').onclick = async () => {
+        var ytBtnEnable = document.getElementById('yt-btn-enable');
+        if (ytBtnEnable) ytBtnEnable.onclick = async () => {
             ytModal.hide();
             const ytToggle = document.getElementById('enable-year-traverse');
             if (ytToggle) ytToggle.checked = true;
@@ -683,7 +788,8 @@ function initIndexPage() {
             } catch (e) { console.error('year-traverse-respond failed', e); }
         };
 
-        document.getElementById('yt-btn-skip').onclick = async () => {
+        var ytBtnSkip = document.getElementById('yt-btn-skip');
+        if (ytBtnSkip) ytBtnSkip.onclick = async () => {
             ytModal.hide();
             try {
                 await fetch('/api/task/year-traverse-respond', {
@@ -702,8 +808,11 @@ function initIndexPage() {
         }
         GlobalProgress.hide();
         stopRunTimer();
-        const modal = new bootstrap.Modal(document.getElementById('quotaExceededModal'));
-        modal.show();
+        var qeModalEl = document.getElementById('quotaExceededModal');
+        if (qeModalEl) {
+            const modal = new bootstrap.Modal(qeModalEl);
+            modal.show();
+        }
     });
 
     // 开始分析按钮
@@ -742,19 +851,25 @@ function initIndexPage() {
             }
         } catch (e) {}
 
-        const outputPrefix = document.getElementById('idx-output-prefix').value || 'paper';
+        const outputPrefix = document.getElementById('idx-output-prefix')?.value || 'paper';
 
         runBtn.disabled = true;
         runBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="animation:spin .8s linear infinite"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40" stroke-dashoffset="10"/></svg>&nbsp; 运行中...';
 
-        document.getElementById('idx-cancel-btn').style.display = 'inline-flex';
-        document.getElementById('idx-progress-section').style.display = 'block';
-        document.getElementById('idx-log-section').style.display = 'block';
-        document.getElementById('idx-results-section').style.display = 'none';
+        var cancelBtn = document.getElementById('idx-cancel-btn');
+        if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+        var progressSection = document.getElementById('idx-progress-section');
+        if (progressSection) progressSection.style.display = 'block';
+        var logSection = document.getElementById('idx-log-section');
+        if (logSection) logSection.style.display = 'block';
+        var resultsSection = document.getElementById('idx-results-section');
+        if (resultsSection) resultsSection.style.display = 'none';
         startRunTimer();
+        resetStuckTimer();
 
         // 清空日志，显示 empty placeholder
-        document.getElementById('idx-log-container').innerHTML =
+        var logContainer = document.getElementById('idx-log-container');
+        if (logContainer) logContainer.innerHTML =
             '<div class="reasoning-empty"><div class="reasoning-empty-icon">🤖</div><div class="reasoning-empty-text">智能体正在初始化...</div></div>';
 
         // 立即显示当前搜索模型
@@ -772,13 +887,14 @@ function initIndexPage() {
         // 重置进度
         updateIndexProgress({ percentage: 0, current: 0, total: 0 });
         currentPhase = '初始化中...';
-        document.getElementById('idx-phase-label').textContent = currentPhase;
+        var phaseLbl = document.getElementById('idx-phase-label');
+        if (phaseLbl) phaseLbl.textContent = currentPhase;
 
         // Show global progress bar
         GlobalProgress.show('初始化中...', 0);
 
         try {
-            const resp = await fetch('/api/run', {
+            const resp = await safeFetch('/api/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ papers: groups, output_prefix: outputPrefix })
@@ -796,22 +912,29 @@ function initIndexPage() {
     });
 
     // 取消按钮
-    document.getElementById('idx-cancel-btn').addEventListener('click', async () => {
-        if (!confirm('确定要取消当前任务吗？')) return;
-        try {
-            await fetch('/api/task/cancel', { method: 'POST' });
-        } catch (e) {
-            console.error('取消失败:', e);
-        }
-        resetRunBtn();
-        GlobalProgress.hide();
-    });
+    var cancelBtnEl = document.getElementById('idx-cancel-btn');
+    if (cancelBtnEl) {
+        cancelBtnEl.addEventListener('click', async () => {
+            if (!confirm('确定要取消当前任务吗？')) return;
+            try {
+                await fetch('/api/task/cancel', { method: 'POST' });
+            } catch (e) {
+                console.error('取消失败:', e);
+            }
+            resetRunBtn();
+            GlobalProgress.hide();
+        });
+    }
 
     // 清空日志
-    document.getElementById('idx-clear-log-btn').addEventListener('click', () => {
-        document.getElementById('idx-log-container').innerHTML =
-            '<div class="reasoning-empty"><div class="reasoning-empty-icon">🧹</div><div class="reasoning-empty-text">日志已清空</div></div>';
-    });
+    var clearLogBtn = document.getElementById('idx-clear-log-btn');
+    if (clearLogBtn) {
+        clearLogBtn.addEventListener('click', () => {
+            var container = document.getElementById('idx-log-container');
+            if (container) container.innerHTML =
+                '<div class="reasoning-empty"><div class="reasoning-empty-icon">🧹</div><div class="reasoning-empty-text">日志已清空</div></div>';
+        });
+    }
 
     let _runTimer = null;
     let _runStart  = 0;
@@ -834,6 +957,7 @@ function initIndexPage() {
 
     function stopRunTimer() {
         if (_runTimer) { clearInterval(_runTimer); _runTimer = null; }
+        if (_stuckTimer) { clearTimeout(_stuckTimer); _stuckTimer = null; }
         const bar = document.getElementById('running-heartbeat');
         if (bar) bar.style.display = 'none';
     }
@@ -841,7 +965,8 @@ function initIndexPage() {
     function resetRunBtn() {
         runBtn.disabled = false;
         runBtn.innerHTML = '<i class="bi bi-play-fill"></i> 开始分析';
-        document.getElementById('idx-cancel-btn').style.display = 'none';
+        var cancelBtn = document.getElementById('idx-cancel-btn');
+        if (cancelBtn) cancelBtn.style.display = 'none';
         resetCacheRunBtn();
         const thinking = document.getElementById('rp-thinking-indicator');
         if (thinking) thinking.classList.remove('active');
@@ -862,23 +987,20 @@ function initIndexPage() {
             cacheRunBtn.disabled = true;
             cacheRunBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" style="animation:spin .8s linear infinite"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-dasharray="40" stroke-dashoffset="10"/></svg>&nbsp; 生成中...';
 
-            document.getElementById('idx-progress-section').style.display = 'block';
-            document.getElementById('idx-log-section').style.display = 'block';
-            document.getElementById('idx-log-container').innerHTML = '';
+            var progressSec = document.getElementById('idx-progress-section');
+            if (progressSec) progressSec.style.display = 'block';
+            var logSec = document.getElementById('idx-log-section');
+            if (logSec) logSec.style.display = 'block';
+            var logCont = document.getElementById('idx-log-container');
+            if (logCont) logCont.innerHTML = '';
 
             try {
-                const resp = await fetch('/api/run/from-cache', {
+                const resp = await safeFetch('/api/run/from-cache', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paper_title: paperTitle, output_prefix: 'cached' })
                 });
                 const data = await resp.json();
-                if (!resp.ok) {
-                    alert(data.message || '启动失败');
-                    cacheRunBtn.disabled = false;
-                    cacheRunBtn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> 生成报告';
-                    return;
-                }
                 // WS already connected; progress/logs will stream automatically
             } catch (e) {
                 alert('请求失败: ' + e.message);
@@ -917,14 +1039,17 @@ function initIndexPage() {
         GlobalProgress.setLabel(currentPhase);
     }
 
+    const MAX_LOG_ENTRIES = 500;
+
     function appendIndexLog(log) {
         const container = document.getElementById('idx-log-container');
+        if (!container) return;
         // Clear empty placeholder
         const empty = container.querySelector('.reasoning-empty');
         if (empty) container.innerHTML = '';
 
         const level = (log.level || 'INFO').toUpperCase();
-        const msg = (log.message || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const msg = escapeHtml(log.message || '');
         const ts = (log.timestamp || '').replace(/^\d{4}-\d{2}-\d{2}\s/, ''); // keep only time
 
         // Detect phase from message
@@ -953,6 +1078,12 @@ function initIndexPage() {
             `<span class="re-msg ${msgClass}">${msg}</span>`;
 
         container.appendChild(entry);
+
+        // Cap log entries at MAX_LOG_ENTRIES
+        while (container.children.length > MAX_LOG_ENTRIES) {
+            container.removeChild(container.firstChild);
+        }
+
         container.scrollTop = container.scrollHeight;
 
         if (log.message && log.message.includes('全部完成')) {
@@ -976,42 +1107,43 @@ function initIndexPage() {
         resetRunBtn();
         const section = document.getElementById('idx-results-section');
         const body    = document.getElementById('idx-results-body');
+        if (!section || !body) return;
         section.style.display = 'block';
 
         let html = '';
 
         if (data && data.excel) {
             const path = normPath(data.excel);
-            const name = path.split('/').pop();
+            const name = escapeHtml(path.split('/').pop());
             html += `<div class="result-file-row">
                 <span class="result-file-icon">📊</span>
                 <span class="result-file-name">${name}</span>
-                <a href="/api/results/download/${path}" class="btn-download btn-dl-excel" download>
+                <a href="/api/results/download/${escapeHtml(path)}" class="btn-download btn-dl-excel" download>
                     <i class="bi bi-download"></i> Excel
                 </a>
             </div>`;
         }
         if (data && data.json) {
             const path = normPath(data.json);
-            const name = path.split('/').pop();
+            const name = escapeHtml(path.split('/').pop());
             html += `<div class="result-file-row">
                 <span class="result-file-icon">📋</span>
                 <span class="result-file-name">${name}</span>
-                <a href="/api/results/download/${path}" class="btn-download btn-dl-json" download>
+                <a href="/api/results/download/${escapeHtml(path)}" class="btn-download btn-dl-json" download>
                     <i class="bi bi-download"></i> JSON
                 </a>
             </div>`;
         }
         if (data && data.dashboard) {
             const path = normPath(data.dashboard);
-            const name = path.split('/').pop();
+            const name = escapeHtml(path.split('/').pop());
             html += `<div class="dashboard-cta">
                 <span class="result-file-icon">🔭</span>
                 <div class="dashboard-cta-text">
                     <strong style="color:#bc8cff">多维画像分析报告已生成</strong><br>
                     <span style="font-size:11.5px">${name}</span>
                 </div>
-                <a href="/api/results/view/${path}" target="_blank" class="btn-download btn-dl-report">
+                <a href="/api/results/view/${escapeHtml(path)}" target="_blank" class="btn-download btn-dl-report">
                     <i class="bi bi-eye"></i> 查看报告
                 </a>
             </div>`;
@@ -1021,8 +1153,8 @@ function initIndexPage() {
         if (data && data.cost_summary) {
             var cs = data.cost_summary;
             var costRows = '';
-            costRows += '<tr><td>ScraperAPI 消耗积分</td><td>' + cs.scraper_credits + ' credits</td></tr>';
-            costRows += '<tr><td>ScraperAPI 请求次数</td><td>' + cs.scraper_requests + ' 次</td></tr>';
+            costRows += '<tr><td>ScraperAPI 消耗积分</td><td>' + escapeHtml(String(cs.scraper_credits)) + ' credits</td></tr>';
+            costRows += '<tr><td>ScraperAPI 请求次数</td><td>' + escapeHtml(String(cs.scraper_requests)) + ' 次</td></tr>';
             costRows += '<tr><td>ScraperAPI 估算费用</td><td>$' + cs.scraper_cost_usd.toFixed(4) + ' <span style="font-size:10px;color:var(--light)">(按 $49/100k credits)</span></td></tr>';
             if (cs.llm_tracked) {
                 costRows += '<tr><td>LLM API 消耗额度</td><td>' + cs.llm_quota_consumed.toFixed(4) + ' 实际额度 ≈ ¥' + cs.llm_cost_rmb.toFixed(2) + '</td></tr>';
@@ -1042,13 +1174,13 @@ function initIndexPage() {
         // Fallback
         if (!html) {
             try {
-                const resp = await fetch('/api/results/list');
+                const resp = await safeFetch('/api/results/list');
                 const files = await resp.json();
                 files.filter(f => f.type === '.xlsx' || f.type === '.json').slice(0, 2).forEach(f => {
                     const isExcel = f.type === '.xlsx';
                     html += `<div class="result-file-row">
                         <span class="result-file-icon">${isExcel ? '📊' : '📋'}</span>
-                        <span class="result-file-name">${f.name}</span>
+                        <span class="result-file-name">${escapeHtml(f.name)}</span>
                         <a href="/api/results/download/${encodeURIComponent(f.name)}"
                            class="btn-download ${isExcel ? 'btn-dl-excel' : 'btn-dl-json'}" download>
                             <i class="bi bi-download"></i> 下载
@@ -1163,10 +1295,10 @@ function initConfigPanel() {
 
     // 测试API
     document.getElementById('test-api-btn')?.addEventListener('click', async function() {
-        const apiKey = document.getElementById('openai-api-key').value;
-        const baseUrl = document.getElementById('openai-base-url').value;
-        const model = document.getElementById('openai-model').value;
-        const testQuery = document.getElementById('test-query').value;
+        const apiKey = document.getElementById('openai-api-key')?.value || '';
+        const baseUrl = document.getElementById('openai-base-url')?.value || '';
+        const model = document.getElementById('openai-model')?.value || '';
+        const testQuery = document.getElementById('test-query')?.value || '';
 
         if (!apiKey || !baseUrl || !model) {
             alert('请先填写完整的API配置（API Key、Base URL、模型名称）');
@@ -1187,7 +1319,7 @@ function initConfigPanel() {
         const alertDiv = document.getElementById('api-test-alert');
 
         try {
-            const response = await fetch('/api/test_openai', {
+            const response = await safeFetch('/api/test_openai', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1200,68 +1332,76 @@ function initConfigPanel() {
 
             const data = await response.json();
 
-            resultDiv.style.display = 'block';
+            if (resultDiv) resultDiv.style.display = 'block';
 
             if (data.status === 'success') {
                 if (data.has_web_search) {
-                    alertDiv.className = 'alert alert-success';
-                    alertDiv.innerHTML = `
-                        <strong><i class="bi bi-check-circle-fill"></i> ${data.message}</strong>
-                        <hr>
-                        <div class="mt-2">
-                            <strong>Web Search功能:</strong> 已启用
-                        </div>
-                        <div class="mt-3">
-                            <strong>测试问题:</strong>
-                            <div class="bg-light p-2 mt-1 border rounded">${escapeHtml(testQuery)}</div>
-                        </div>
-                        <div class="mt-3">
-                            <strong>不带Web Search的回答:</strong>
-                            <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.without_web_search)}</div>
-                        </div>
-                        <div class="mt-3">
-                            <strong>带Web Search的回答:</strong>
-                            <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.with_web_search)}</div>
-                        </div>
-                    `;
+                    if (alertDiv) {
+                        alertDiv.className = 'alert alert-success';
+                        alertDiv.innerHTML = `
+                            <strong><i class="bi bi-check-circle-fill"></i> ${escapeHtml(data.message)}</strong>
+                            <hr>
+                            <div class="mt-2">
+                                <strong>Web Search功能:</strong> 已启用
+                            </div>
+                            <div class="mt-3">
+                                <strong>测试问题:</strong>
+                                <div class="bg-light p-2 mt-1 border rounded">${escapeHtml(testQuery)}</div>
+                            </div>
+                            <div class="mt-3">
+                                <strong>不带Web Search的回答:</strong>
+                                <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.without_web_search)}</div>
+                            </div>
+                            <div class="mt-3">
+                                <strong>带Web Search的回答:</strong>
+                                <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.with_web_search)}</div>
+                            </div>
+                        `;
+                    }
                 } else {
-                    alertDiv.className = 'alert alert-warning';
-                    alertDiv.innerHTML = `
-                        <strong><i class="bi bi-exclamation-triangle-fill"></i> ${data.message}</strong>
-                        <hr>
-                        <div class="mt-2">
-                            <strong>Web Search功能:</strong> 未检测到或不支持
-                        </div>
-                        <div class="mt-3">
-                            <strong>测试问题:</strong>
-                            <div class="bg-light p-2 mt-1 border rounded">${escapeHtml(testQuery)}</div>
-                        </div>
-                        <div class="mt-3">
-                            <strong>不带Web Search的回答:</strong>
-                            <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.without_web_search)}</div>
-                        </div>
-                        <div class="mt-3">
-                            <strong>带Web Search的回答:</strong>
-                            <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.with_web_search)}</div>
-                        </div>
-                    `;
+                    if (alertDiv) {
+                        alertDiv.className = 'alert alert-warning';
+                        alertDiv.innerHTML = `
+                            <strong><i class="bi bi-exclamation-triangle-fill"></i> ${escapeHtml(data.message)}</strong>
+                            <hr>
+                            <div class="mt-2">
+                                <strong>Web Search功能:</strong> 未检测到或不支持
+                            </div>
+                            <div class="mt-3">
+                                <strong>测试问题:</strong>
+                                <div class="bg-light p-2 mt-1 border rounded">${escapeHtml(testQuery)}</div>
+                            </div>
+                            <div class="mt-3">
+                                <strong>不带Web Search的回答:</strong>
+                                <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.without_web_search)}</div>
+                            </div>
+                            <div class="mt-3">
+                                <strong>带Web Search的回答:</strong>
+                                <div class="bg-light p-3 mt-1 border rounded" style="white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(data.test_results.with_web_search)}</div>
+                            </div>
+                        `;
+                    }
                 }
             } else {
+                if (alertDiv) {
+                    alertDiv.className = 'alert alert-danger';
+                    alertDiv.innerHTML = `
+                        <strong><i class="bi bi-x-circle-fill"></i> 测试失败</strong>
+                        <hr>
+                        <div class="mt-2">${escapeHtml(data.message)}</div>
+                    `;
+                }
+            }
+        } catch (error) {
+            if (resultDiv) resultDiv.style.display = 'block';
+            if (alertDiv) {
                 alertDiv.className = 'alert alert-danger';
                 alertDiv.innerHTML = `
                     <strong><i class="bi bi-x-circle-fill"></i> 测试失败</strong>
                     <hr>
-                    <div class="mt-2">${escapeHtml(data.message)}</div>
+                    <div class="mt-2">网络错误: ${escapeHtml(error.toString())}</div>
                 `;
             }
-        } catch (error) {
-            resultDiv.style.display = 'block';
-            alertDiv.className = 'alert alert-danger';
-            alertDiv.innerHTML = `
-                <strong><i class="bi bi-x-circle-fill"></i> 测试失败</strong>
-                <hr>
-                <div class="mt-2">网络错误: ${escapeHtml(error.toString())}</div>
-            `;
         } finally {
             btn.disabled = false;
             btn.innerHTML = originalHtml;

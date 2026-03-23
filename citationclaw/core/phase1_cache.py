@@ -9,11 +9,18 @@
 """
 import json
 import asyncio
+import logging
+import os
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-DEFAULT_CACHE_FILE = Path("data/cache/phase1_cache.json")
+from citationclaw.app.config_manager import DATA_DIR
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_CACHE_FILE = DATA_DIR / "cache" / "phase1_cache.json"
 
 
 class Phase1Cache:
@@ -22,11 +29,16 @@ class Phase1Cache:
     def __init__(self, cache_file: Path = DEFAULT_CACHE_FILE):
         self.cache_file = cache_file
         self._data: dict = {}
-        self._lock = asyncio.Lock()
+        self._lock = None  # created lazily for Python 3.12+ compatibility
         self._hits = 0
         self._misses = 0
         self._updates = 0
         self._load()
+
+    def _get_lock(self):
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     # ─── 内部 ────────────────────────────────────────────────────────────────
 
@@ -34,18 +46,28 @@ class Phase1Cache:
         if self.cache_file.exists():
             try:
                 self._data = json.loads(self.cache_file.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to load phase1 cache from %s: %s", self.cache_file, e)
                 self._data = {}
         else:
             self._data = {}
 
     async def _save(self):
-        """将内存数据写入磁盘（调用方须已持有 _lock）。"""
+        """将内存数据写入磁盘（调用方须已持有 _lock）。使用原子写入。"""
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_file.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        data_snapshot = self._data.copy()
+
+        def _write():
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=str(self.cache_file.parent), suffix='.tmp')
+            try:
+                with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+                    json.dump(data_snapshot, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, str(self.cache_file))
+            except BaseException:
+                os.unlink(tmp_path)
+                raise
+
+        await asyncio.to_thread(_write)
 
     @staticmethod
     def _paper_key(paper_link: str, paper_title: str) -> str:
@@ -111,7 +133,7 @@ class Phase1Cache:
         """
         if not paper_dict:
             return
-        async with self._lock:
+        async with self._get_lock():
             entry = self._entry(url)
             if year is not None:
                 entry["mode"] = "year_traverse"
@@ -128,7 +150,7 @@ class Phase1Cache:
 
     async def mark_year_complete(self, url: str, year: int):
         """标记某年份已完整爬取。"""
-        async with self._lock:
+        async with self._get_lock():
             entry = self._entry(url)
             entry["mode"] = "year_traverse"
             entry["years"].setdefault(str(year), {})["complete"] = True
@@ -138,7 +160,7 @@ class Phase1Cache:
 
     async def mark_complete(self, url: str):
         """标记整个 URL 已完整爬取。"""
-        async with self._lock:
+        async with self._get_lock():
             entry = self._entry(url)
             entry["complete"] = True
             entry["updated_at"] = datetime.now().isoformat()
@@ -163,7 +185,13 @@ class Phase1Cache:
             return ""
         for page_idx in range(0, len(all_papers), page_size):
             batch = all_papers[page_idx: page_idx + page_size]
-            paper_dict = {f"paper_{i}": p for i, p in enumerate(batch)}
+            paper_dict = {}
+            for i, p in enumerate(batch):
+                paper_entry = dict(p)
+                # Propagate paper_year if present in cached entry
+                if "paper_year" in p:
+                    paper_entry["paper_year"] = p["paper_year"]
+                paper_dict[f"paper_{i}"] = paper_entry
             record = {"paper_dict": paper_dict, "next_page": None}
             lines.append(json.dumps({f"page_{page_idx // page_size}": record}, ensure_ascii=False))
 

@@ -4,6 +4,7 @@ Phase 5: HTML 画像报告生成器
 新增下载链接 + 院士引用描述折叠。
 """
 import ast
+import html as html_module
 import math
 import re
 import json
@@ -14,6 +15,20 @@ from typing import Callable, Optional
 
 import pandas as pd
 from openai import OpenAI
+
+
+def _escape(text):
+    """HTML-escape a string to prevent XSS from LLM-generated content."""
+    return html_module.escape(str(text)) if text else ''
+
+
+def _is_truthy(val):
+    """Parse a value that may be bool, str, or other type into a boolean."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() not in ('false', '0', 'nan', 'none', '')
+    return bool(val)
 
 _FAMOUS_INSTITUTIONS = {
     # 国际科技企业
@@ -167,6 +182,7 @@ class DashboardGenerator:
         descriptions = []
         citing_pairs = []
         self_citing_titles = set()
+        skipped_rows = 0
 
         for _, row in df.iterrows():
             title_raw = str(row.get('Paper_Title', '') or '').strip()
@@ -175,12 +191,13 @@ class DashboardGenerator:
             if not key:
                 key = str(row.get('Paper_Link', '') or '').strip().lower()
             if not key:
+                skipped_rows += 1
                 continue  # cannot identify this row — skip
 
             citing = str(row.get('Citing_Paper', '') or '').strip()
 
             is_self = row.get('Is_Self_Citation', False)
-            if is_self and str(is_self).lower() not in ('false', '0', 'nan', 'none', ''):
+            if _is_truthy(is_self):
                 self_citing_titles.add(key)
 
             if key not in papers_by_key:
@@ -194,7 +211,7 @@ class DashboardGenerator:
                     "institution": str(row.get('First_Author_Institution', '') or '').strip(),
                     "authors": str(row.get('Authors_with_Profile', '') or '').strip(),
                     "author_affiliation": str(row.get('Searched Author-Affiliation', '') or '').strip(),
-                    "citing_papers": set(),   # which target papers this citing paper belongs to
+                    "citing_papers": [],   # which target papers this citing paper belongs to
                 }
             else:
                 # Keep the highest citation count seen across rows for the same title
@@ -202,8 +219,8 @@ class DashboardGenerator:
                 if new_cit > papers_by_key[key]["citations"]:
                     papers_by_key[key]["citations"] = new_cit
 
-            if citing:
-                papers_by_key[key]["citing_papers"].add(citing)
+            if citing and citing not in papers_by_key[key]["citing_papers"]:
+                papers_by_key[key]["citing_papers"].append(citing)
 
             desc = str(row.get('Citing_Description', '') or '').strip()
             if desc and desc.upper() not in ("NONE", ""):
@@ -213,6 +230,9 @@ class DashboardGenerator:
                     "citing_paper": citing,
                     "description": desc,
                 })
+
+        if skipped_rows > 0:
+            self.log(f"  [_load_citing_data] 跳过 {skipped_rows} 行（标题和链接均为空）")
 
         papers = sorted(papers_by_key.values(), key=lambda p: -p["citations"])
         total_papers = len(papers_by_key)
@@ -652,7 +672,8 @@ color 必须从 ["teal", "sage", "amber", "violet"] 中选择（每种各一个�
         top_year = max(stats["year_counter"], key=stats["year_counter"].get) if stats["year_counter"] else 2025
         top_year_n = stats["year_counter"].get(top_year, 0)
         total = stats["unique_papers"]
-        cn_pct = round(100 * stats["country_counter"].get("中国", 0) / max(stats["unique_scholars"], 1))
+        total_with_country = sum(stats["country_counter"].values())
+        cn_pct = round(100 * stats["country_counter"].get("中国", 0) / max(total_with_country, 1))
         return [
             {"color": "teal", "icon": "📈", "title": "引用时间：扩散势头强劲",
              "body": f"{total}篇引用论文中，{top_year}年发表的占比最高（{top_year_n}篇），表明该论文正处于影响力快速攀升期。"},
@@ -1074,7 +1095,7 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
                 '  <p class="cite-sum-preview">' + _cs_preview_safe + '</p>\n'
                 '  <div id="citeSummaryContent" style="display:none">\n'
                 '    <div class="cite-sum-body"><div class="md-content">'
-                + citation_summary
+                + _escape(citation_summary)
                 + '</div></div>\n'
                 '  </div>\n'
                 '</div>'
@@ -1267,7 +1288,7 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
             col = ct_colors[i % len(ct_colors)]
             ct_items += f"""
         <div class="ctb-row">
-          <div class="ctb-label"><span>{ct.get('type', '')}</span><span>{ct.get('count', 0)} 篇 ({pct}%)</span></div>
+          <div class="ctb-label"><span>{_escape(ct.get('type', ''))}</span><span>{ct.get('count', 0)} 篇 ({pct}%)</span></div>
           <div class="ctb-track"><div class="ctb-fill {col}" style="width:{pct}%"></div></div>
         </div>"""
 
@@ -1288,13 +1309,13 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
         for th in themes:
             freq = th.get("frequency", 5)
             size = 11 + max(0, freq - 3)
-            theme_html += f'<span class="theme-tag" style="font-size:{size}px">{th.get("theme", "")}</span>'
+            theme_html += f'<span class="theme-tag" style="font-size:{size}px">{_escape(th.get("theme", ""))}</span>'
         findings_html = ""
         for i, f in enumerate(citation_analysis.get("key_findings", [])[:5]):
             findings_html += f"""
         <div class="finding-item">
           <div class="finding-num">{i+1}</div>
-          <div>{f}</div>
+          <div>{_escape(f)}</div>
         </div>"""
 
         # ── Section 03 body: show placeholder when citing analysis was skipped
@@ -1535,33 +1556,35 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
             metrics_html += f"""
         <div class="pred-metric">
           <div>
-            <div class="pred-metric-label">{m.get('label', '')}</div>
-            <div class="pred-metric-note">{m.get('note', '')}</div>
+            <div class="pred-metric-label">{_escape(m.get('label', ''))}</div>
+            <div class="pred-metric-note">{_escape(m.get('note', ''))}</div>
           </div>
-          <div class="pred-metric-val">{m.get('value', '')}</div>
+          <div class="pred-metric-val">{_escape(m.get('value', ''))}</div>
         </div>"""
         impact_html = ""
         for imp in prediction.get("impact_scores", []):
             score = imp.get("score", 50)
-            col_class = imp.get("color_class", "fill-teal")
+            col_class = _escape(imp.get("color_class", "fill-teal"))
             impact_html += f"""
         <div>
-          <div class="impact-row-label"><span>{imp.get('label', '')}</span><span style="color:#7dd8b0">{score}%</span></div>
+          <div class="impact-row-label"><span>{_escape(imp.get('label', ''))}</span><span style="color:#7dd8b0">{score}%</span></div>
           <div class="impact-track"><div class="impact-fill {col_class}" style="width:{score}%"></div></div>
         </div>"""
-        commentary = prediction.get("prediction_commentary", "")
+        commentary = _escape(prediction.get("prediction_commentary", ""))
 
         # ── Insights
         insights_html = ""
         for ins in insights:
-            color = ins.get("color", "teal")
+            color = _escape(ins.get("color", "teal"))
             icon = ins.get("icon", "📊")
-            title = ins.get("title", "")
+            title = _escape(ins.get("title", ""))
             body = ins.get("body", "")
+            # Allow <strong> tags from LLM but escape everything else
+            body_escaped = _escape(body).replace('&lt;strong&gt;', '<strong>').replace('&lt;/strong&gt;', '</strong>')
             insights_html += f"""
       <div class="insight-card {color}">
         <h4>{icon} {title}</h4>
-        <p>{body}</p>
+        <p>{body_escaped}</p>
       </div>"""
 
         gen_date = f"{now.year}.{str(now.month).zfill(2)}.{str(now.day).zfill(2)}"
@@ -1590,7 +1613,7 @@ a.author-pill:hover { background: var(--teal-light); border-color: var(--teal); 
         # Each citing paper links only to the target papers it actually cites
         kg_links = []
         for _i, _p in enumerate(kg_paper_list):
-            paper_citing_set = _p.get("citing_papers", set())
+            paper_citing_set = _p.get("citing_papers", [])
             linked = False
             for _ci, _ct in enumerate(canonical_titles or []):
                 if _ct in paper_citing_set:
@@ -2666,6 +2689,7 @@ new Chart(document.getElementById('cTrend'), {{
         Full pipeline: load data → LLM analysis → build HTML → write file.
         Returns output_html path.
         """
+        self.log("Dashboard: 加载数据...")
         self.log("📂 加载 citing_with_description 数据...")
         papers, total_papers, descriptions, citing_pairs, unique_citing_papers, self_citation_count = \
             self._load_citing_data(citing_desc_excel)
@@ -2679,6 +2703,7 @@ new Chart(document.getElementById('cTrend'), {{
         stats = self._compute_stats(papers, total_papers, top_scholars, all_scholars)
         institution_stats = self._compute_institution_stats(papers)
 
+        self.log("Dashboard: 分析引用模式...")
         self.log("🤖 启动 AI 分析...")
         titles = [p["title"] for p in papers]
         keywords = self._analyze_keywords(titles)
@@ -2695,12 +2720,14 @@ new Chart(document.getElementById('cTrend'), {{
             citation_analysis = self._analyze_citation_descriptions(descriptions, citing_pairs)
         prediction = self._generate_prediction(papers, stats)
         insights = self._generate_insights(papers, stats, citation_analysis)
+        self.log("Dashboard: 生成AI洞察...")
         citation_summary = (
             self._summarize_citation_descriptions(descriptions, citing_pairs)
             if (descriptions and not skip_citing_analysis)
             else ""
         )
 
+        self.log("Dashboard: 渲染HTML...")
         self.log("🏗  构建 HTML...")
         html = self._build_html(
             papers, total_papers, top_scholars, all_scholars,

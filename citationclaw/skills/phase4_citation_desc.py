@@ -11,6 +11,13 @@ class CitationDescriptionSkill:
     name = "phase4_citation_desc"
 
     async def run(self, ctx: SkillContext, **kwargs) -> SkillResult:
+        try:
+            return await self._run_inner(ctx, **kwargs)
+        except Exception as e:
+            ctx.log(f"[Phase4] fatal error: {e}")
+            raise
+
+    async def _run_inner(self, ctx: SkillContext, **kwargs) -> SkillResult:
         config = ctx.config
         input_excel = Path(kwargs["input_excel"])
         output_excel = Path(kwargs["output_excel"])
@@ -27,11 +34,22 @@ class CitationDescriptionSkill:
             cache=desc_cache,
             cancel_event=quota_event,
         )
+
+        _cancel_check = ctx.cancel_check
+        _quota = quota_event
+
+        def _combined_cancel():
+            if _cancel_check and _cancel_check():
+                return True
+            if _quota is not None and _quota.is_set():
+                return True
+            return False
+
         await desc_searcher.search(
             input_excel=input_excel,
             output_excel=output_excel,
             parallel_workers=parallel_workers,
-            cancel_check=lambda: (ctx.cancel_check() if ctx.cancel_check else False) or (quota_event is not None and quota_event.is_set()),
+            cancel_check=_combined_cancel,
         )
         stats = desc_cache.stats()
         return SkillResult(

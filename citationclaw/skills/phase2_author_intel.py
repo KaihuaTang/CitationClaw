@@ -10,6 +10,13 @@ class AuthorIntelSkill:
     name = "phase2_author_intel"
 
     async def run(self, ctx: SkillContext, **kwargs) -> SkillResult:
+        try:
+            return await self._run_inner(ctx, **kwargs)
+        except Exception as e:
+            ctx.log(f"[Phase2] fatal error: {e}")
+            raise
+
+    async def _run_inner(self, ctx: SkillContext, **kwargs) -> SkillResult:
         config = ctx.config
         input_file = Path(kwargs["input_file"])
         output_file = Path(kwargs["output_file"])

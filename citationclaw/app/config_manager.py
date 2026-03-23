@@ -3,6 +3,18 @@ from pathlib import Path
 from typing import List
 from pydantic import BaseModel, Field
 
+# Project root: three levels up from this file (config_manager.py -> app -> citationclaw -> project root)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config.json"
+
+
+def _resolve_data_dir() -> Path:
+    """Return the absolute path to the project data directory."""
+    return _PROJECT_ROOT / "data"
+
+
+DATA_DIR = _resolve_data_dir()
+
 
 class AppConfig(BaseModel):
     """应用配置模型"""
@@ -130,7 +142,7 @@ class AppConfig(BaseModel):
 
 
 class ConfigManager:
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = str(_DEFAULT_CONFIG_PATH)):
         self.config_path = Path(config_path)
         self.config = self._load()
 

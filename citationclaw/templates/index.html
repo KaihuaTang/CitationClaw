@@ -1026,8 +1026,7 @@ function addScholarSelected() {
 }
 
 function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-            .replace(/"/g,'&quot;');
+    return escapeHtml(s);  // delegate to main.js escapeHtml (handles all 5 chars)
 }
 </script>
 
@@ -1253,9 +1252,13 @@ function escHtml(s) {
 </div>
 <script>
 (function(){
+  if (localStorage.getItem('citationclaw_notice_dismissed')) return;
   var modal = new bootstrap.Modal(document.getElementById('startupNoticeModal'));
   modal.show();
-  document.getElementById('startupNoticeOk').addEventListener('click', function(){ modal.hide(); });
+  document.getElementById('startupNoticeOk').addEventListener('click', function(){
+    modal.hide();
+    localStorage.setItem('citationclaw_notice_dismissed', '1');
+  });
 })();
 </script>
 {% endblock %}

@@ -3,6 +3,16 @@ import pandas as pd
 from pathlib import Path
 from typing import Callable
 
+
+def _is_truthy(val):
+    """Parse a value that may be bool, str, or other type into a boolean."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() not in ('false', '0', 'nan', 'none', '')
+    return bool(val)
+
+
 class ResultExporter:
     def __init__(self, log_callback: Callable):
         """
@@ -13,41 +23,43 @@ class ResultExporter:
         """
         self.log_callback = log_callback
 
-    def highligh_renowned_scholar(self,flattened,renowned_scholar_excel_outputs):
+    def highlight_renowned_scholar(self, flattened, renowned_scholar_excel_outputs):
         ## 标记学者
         def tag_scholar(df):
-            for i in range(len(df)):
-                title = df.loc[i, 'Title']
+            for idx, row in df.iterrows():
+                title = row['Title']
                 if not pd.isnull(title):
                     if 'Fellowship' not in title:
                         if '中国科学院院士' in title or '中国工程院院士' in title or '两院院士' in title:
-                            df.at[i, '两院院士/其他院士/Fellow'] = '院士'
+                            df.at[idx, '两院院士/其他院士/Fellow'] = '院士'
                         elif '院士' in title:
-                            df.at[i, '两院院士/其他院士/Fellow'] = '其他院士'
+                            df.at[idx, '两院院士/其他院士/Fellow'] = '其他院士'
                         elif 'Fellow' in title or 'fellow' in title:
-                            df.at[i, '两院院士/其他院士/Fellow'] = 'Fellow'
+                            df.at[idx, '两院院士/其他院士/Fellow'] = 'Fellow'
             return df
 
         ## 转换df，找到大佬级别
         scholar_df = []
         for d in flattened:
             # 自引论文不纳入知名学者统计
-            if d.get('Is_Self_Citation', False):
+            if _is_truthy(d.get('Is_Self_Citation', False)):
                 continue
-            paper_title = d['Paper_Title']
-            paper_year = d['Paper_Year']
-            paper_link = d['Paper_Link']
-            paper_citation = d['Citations']
+            paper_title = d.get('Paper_Title', '')
+            paper_year = d.get('Paper_Year', '')
+            paper_link = d.get('Paper_Link', '')
+            paper_citation = d.get('Citations', 0)
             formated_renowned_scholars = d.get('Formated Renowned Scholar', [])
+            if not isinstance(formated_renowned_scholars, list):
+                formated_renowned_scholars = []
             for scholar in formated_renowned_scholars:
-                name = scholar['姓名']
+                name = scholar.get('姓名', '')
                 if name != '':
                     scholar_df.append({
                         'Name': name,
-                        'Institution': scholar['机构'],
-                        'Country': scholar['国家'],
-                        'Job': scholar['职务'],
-                        'Title': scholar['荣誉称号'],
+                        'Institution': scholar.get('机构', ''),
+                        'Country': scholar.get('国家', ''),
+                        'Job': scholar.get('职务', ''),
+                        'Title': scholar.get('荣誉称号', ''),
                         'PaperTitle': paper_title,
                         'PaperCitations': paper_citation,
                         'PaperYear': paper_year,
@@ -67,6 +79,9 @@ class ResultExporter:
 
         scholar_df.to_excel(renowned_scholar_excel_outputs[0], sheet_name='All Renowned scholars', index=False)
         selected_df.to_excel(renowned_scholar_excel_outputs[1], sheet_name='Top-tier scholars', index=False)
+
+    # Backward-compatible alias for the old misspelled name
+    highligh_renowned_scholar = highlight_renowned_scholar
 
     def export(
         self,
@@ -135,7 +150,7 @@ class ResultExporter:
         renowned_scholar_excel_outputs = [renowned_scholar_excel_output1,renowned_scholar_excel_output2]
         self.log_callback("正在生成重量级学者Excel文件...")
         try:
-            self.highligh_renowned_scholar(flattened,renowned_scholar_excel_outputs)
+            self.highlight_renowned_scholar(flattened,renowned_scholar_excel_outputs)
             self.log_callback(f"重量级学者Excel文件已保存: {renowned_scholar_excel_outputs}")
         except Exception as e:
             self.log_callback(f"重量级学者Excel导出失败: {e}")

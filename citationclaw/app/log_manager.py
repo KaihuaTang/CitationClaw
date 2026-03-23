@@ -43,6 +43,18 @@ class LogManager:
         # 清理断开的连接
         self.websocket_connections -= disconnected
 
+    def _schedule_broadcast(self, message: dict):
+        """
+        Schedule an async broadcast. Falls back to just appending to the deque
+        when no event loop is running (e.g. during startup or from a sync context).
+        """
+        try:
+            asyncio.create_task(self._broadcast(message))
+        except RuntimeError:
+            # No running event loop — silently skip broadcast.
+            # The log entry is already in self.logs so it won't be lost.
+            pass
+
     def _log(self, level: str, message: str):
         """
         记录日志
@@ -62,10 +74,10 @@ class LogManager:
         print(f"[{log_entry['timestamp']}] [{level}] {message}")
 
         # 异步广播(不阻塞)
-        asyncio.create_task(self._broadcast({
+        self._schedule_broadcast({
             "type": "log",
             "data": log_entry
-        }))
+        })
 
     def info(self, message: str):
         """记录INFO级别日志"""
@@ -85,10 +97,10 @@ class LogManager:
 
     def broadcast_event(self, event_type: str, payload: dict):
         """向所有 WebSocket 连接广播自定义事件（非日志型消息）"""
-        asyncio.create_task(self._broadcast({
+        self._schedule_broadcast({
             "type": event_type,
             "data": payload
-        }))
+        })
 
     def update_progress(self, current: int, total: int):
         """
@@ -106,10 +118,10 @@ class LogManager:
         }
 
         # 异步广播进度
-        asyncio.create_task(self._broadcast({
+        self._schedule_broadcast({
             "type": "progress",
             "data": self.current_progress
-        }))
+        })
 
     def get_recent_logs(self, count: int = 100) -> List[dict]:
         """
