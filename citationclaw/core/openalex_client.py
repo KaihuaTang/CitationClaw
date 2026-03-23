@@ -32,7 +32,7 @@ class OpenAlexClient:
         return parsed
 
     @staticmethod
-    def _titles_match(query: str, result: str, threshold: float = 0.5) -> bool:
+    def _titles_match(query: str, result: str, threshold: float = 0.7) -> bool:
         """Check if result title is similar enough to query (word overlap)."""
         import re as _re
         q_words = set(_re.sub(r'[^\w\s]', ' ', query.lower()).split())

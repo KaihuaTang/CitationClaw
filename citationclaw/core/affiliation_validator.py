@@ -94,29 +94,51 @@ class AffiliationValidator:
         if not affiliation:
             return ""
         aff = affiliation.lower()
-        # Chinese institutions
-        cn_kw = ["大学", "university of china", "chinese academy", "中国", "beijing",
-                 "shanghai", "tsinghua", "peking", "zhejiang", "fudan", "nanjing",
+        # Chinese institutions (extensive — most common pattern)
+        cn_kw = ["大学", "学院", "研究所", "研究院", "中国", "中科院",
+                 "university of china", "chinese academy", "china ",
+                 "tsinghua", "peking", "zhejiang", "fudan", "nanjing",
                  "wuhan", "harbin", "beihang", "huazhong", "sjtu", "ustc",
                  "sun yat-sen", "southeast university", "tongji", "xidian",
-                 "national university of defense", "中科院", "北京", "上海",
-                 "深圳", "广州", "杭州", "南京", "武汉", "成都", "西安"]
+                 "national university of defense", "tianjin", "sichuan",
+                 "dalian", "jilin", "lanzhou", "xiamen", "shandong",
+                 "chongqing", "hunan", "jinan university", "soochow",
+                 "renmin", "ocean university", "northwest", "guizhou",
+                 "guilin", "changsha", "kunming", "hefei",
+                 "electronic science and technology",
+                 "beijing", "shanghai", "shenzhen", "guangzhou",
+                 "hangzhou", "nanjing", "wuhan", "chengdu", "xian",
+                 "北京", "上海", "深圳", "广州", "杭州", "南京", "武汉",
+                 "成都", "西安", "天津", "重庆", "哈尔滨", "长沙",
+                 "huawei", "tencent", "alibaba", "baidu", "bytedance",
+                 "sensetime", "megvii", "xiaomi", "dji"]
         if any(k in aff for k in cn_kw):
             return "CN"
         # US institutions
-        us_kw = ["mit", "stanford", "harvard", "berkeley", "carnegie mellon",
-                 "princeton", "yale", "columbia university", "cornell", "ucla",
+        us_kw = ["mit ", "m.i.t", "stanford", "harvard", "berkeley",
+                 "carnegie mellon", "cmu", "princeton", "yale",
+                 "columbia university", "cornell", "ucla", "caltech",
                  "university of california", "university of michigan",
                  "university of washington", "georgia tech", "uiuc",
                  "university of illinois", "notre dame", "michigan state",
-                 "google", "openai", "meta ai", "microsoft research",
-                 "nvidia", "apple", "amazon", "ibm research"]
+                 "university of maryland", "university of texas",
+                 "university of pennsylvania", "upenn", "nyu",
+                 "university of wisconsin", "purdue", "ohio state",
+                 "duke university", "rice university", "usc",
+                 "google", "openai", "meta ai", "meta research",
+                 "microsoft research", "microsoft ", "nvidia",
+                 "apple", "amazon", "ibm research", "adobe",
+                 "salesforce", "intel labs"]
         if any(k in aff for k in us_kw):
             return "US"
         # UK
         if any(k in aff for k in ["oxford", "cambridge", "imperial college",
-                                   "university of london", "ucl", "edinburgh",
-                                   "manchester", "leicester"]):
+                                   "university of london", "ucl ", "edinburgh",
+                                   "manchester", "leicester", "bristol",
+                                   "warwick", "southampton", "nottingham",
+                                   "glasgow", "liverpool", "leeds",
+                                   "queen mary", "king's college",
+                                   "deepmind", "alan turing"]):
             return "GB"
         # Others
         _country_kw = {

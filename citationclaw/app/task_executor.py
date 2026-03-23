@@ -211,6 +211,13 @@ class TaskExecutor:
             f"共 {len(records_data)} 篇"
         )
 
+        # Snapshot API authors NOW — before any enrichment (for Excel comparison)
+        import copy
+        api_snapshots: dict = {}  # idx → raw API author list (deep copy)
+        pdf_snapshots: dict = {}  # idx → PDF-extracted author list
+        for idx, (paper, metadata, canonical) in enumerate(records_data):
+            api_snapshots[idx] = copy.deepcopy((metadata or {}).get("authors", []))
+
         # ── Phase 2c: 查询作者 h-index (S2 author API) ──
         # Deduplicate authors for enrichment
         seen_authors: dict = {}
@@ -341,13 +348,6 @@ class TaskExecutor:
         )
         validator = AffiliationValidator()
 
-        # Snapshot API authors BEFORE PDF cross-validation (for Excel comparison)
-        import copy
-        api_snapshots: dict = {}  # idx → list of author dicts (deep copy)
-        pdf_snapshots: dict = {}  # idx → list of pdf-extracted author dicts
-        for idx, (paper, metadata, canonical) in enumerate(records_data):
-            api_snapshots[idx] = copy.deepcopy((metadata or {}).get("authors", []))
-
         # Build download-friendly dicts with all URL sources (including GS paper_link)
         dl_papers = []
         for paper, metadata, canonical in records_data:
@@ -398,7 +398,11 @@ class TaskExecutor:
                             return
 
                     # Parse PDF
-                    parsed = parser.parse(pdf_path, pkey)
+                    try:
+                        parsed = parser.parse(pdf_path, pkey)
+                    except Exception as e:
+                        self.log_manager.info(f"  [解析失败] {title[:40]}... : {str(e)[:50]}")
+                        parsed = None
                     if not parsed:
                         return
 

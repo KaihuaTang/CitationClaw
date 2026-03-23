@@ -110,16 +110,12 @@ class MetadataCollector:
         if not s2_authors:
             return oa_authors
 
-        # Build S2 name lookup (lowercase → author dict)
+        # Build S2 name lookup (full name only — no last-name-only matching to avoid collisions)
         s2_by_name = {}
         for a in s2_authors:
             name = a.get("name", "").strip().lower()
             if name:
                 s2_by_name[name] = a
-                # Also index by last name for fuzzy matching
-                parts = name.split()
-                if len(parts) >= 2:
-                    s2_by_name[parts[-1]] = a  # last name
 
         # Enrich OA authors with S2 data
         merged = []

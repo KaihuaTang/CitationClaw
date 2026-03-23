@@ -36,7 +36,7 @@ class ArxivClient:
         return result
 
     @staticmethod
-    def _titles_match(query: str, result: str, threshold: float = 0.5) -> bool:
+    def _titles_match(query: str, result: str, threshold: float = 0.7) -> bool:
         """Check if result title is similar enough to query (word overlap ratio)."""
         q_words = set(re.sub(r'[^\w\s]', ' ', query.lower()).split())
         r_words = set(re.sub(r'[^\w\s]', ' ', result.lower()).split())

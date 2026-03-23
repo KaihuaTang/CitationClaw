@@ -96,12 +96,18 @@ class PipelineAdapter:
                 pdf_lines.append(f"{a.get('name','')} | {a.get('affiliation','') or '未知'}")
             pdf_affil_str = "\n".join(pdf_lines)
 
-        # First author info (normalize country to Chinese)
+        # First author info (normalize country to Chinese, infer if missing)
         first_author = authors[0] if authors else {}
         first_inst = first_author.get("affiliation", "")
         first_country = ScholarSearchAgent._normalize_country(
             first_author.get("country", "")
         )
+        # If still no country, try to infer from affiliation
+        if not first_country and first_inst:
+            from citationclaw.core.affiliation_validator import AffiliationValidator
+            inferred = AffiliationValidator._infer_country(first_inst)
+            if inferred:
+                first_country = ScholarSearchAgent._normalize_country(inferred)
 
         # Build author info summary (merged version with all details)
         author_info_parts = []

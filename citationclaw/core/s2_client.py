@@ -29,7 +29,21 @@ class S2Client:
         results = data.get("data", [])
         if not results:
             return None
-        return self._parse_paper(results[0])
+        parsed = self._parse_paper(results[0])
+        # Validate title similarity
+        if not self._titles_match(title, parsed.get("title", "")):
+            return None
+        return parsed
+
+    @staticmethod
+    def _titles_match(query: str, result: str, threshold: float = 0.7) -> bool:
+        """Check title similarity by word overlap."""
+        import re as _re
+        q_words = set(_re.sub(r'[^\w\s]', ' ', query.lower()).split())
+        r_words = set(_re.sub(r'[^\w\s]', ' ', result.lower()).split())
+        if not q_words:
+            return False
+        return len(q_words & r_words) / len(q_words) >= threshold
 
     async def get_author(self, author_id: str) -> Optional[dict]:
         url = f"{BASE_URL}/author/{author_id}?fields=name,hIndex,citationCount,affiliations"
