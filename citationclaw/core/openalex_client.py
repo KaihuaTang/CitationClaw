@@ -76,6 +76,7 @@ class OpenAlexClient:
                 "affiliation": inst.get("display_name", ""),
                 "country": inst.get("country_code", ""),
             })
+        oa_loc = work.get("best_oa_location") or {}
         return {
             "title": work.get("title", ""),
             "year": work.get("publication_year"),
@@ -83,6 +84,7 @@ class OpenAlexClient:
             "cited_by_count": work.get("cited_by_count", 0),
             "openalex_id": work.get("id", ""),
             "authors": authors,
+            "oa_pdf_url": oa_loc.get("pdf_url", ""),
             "source": "openalex",
         }
 
