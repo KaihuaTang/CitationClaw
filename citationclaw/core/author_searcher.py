@@ -48,6 +48,7 @@ class AuthorSearcher:
         try:
             # 配置httpx连接池限制，避免TCP连接积累
             self._http_client = httpx.AsyncClient(
+                trust_env=False,
                 limits=httpx.Limits(
                     max_connections=100,      # 最大连接数
                     max_keepalive_connections=20,  # 保持活跃的连接数
@@ -70,7 +71,8 @@ class AuthorSearcher:
                 api_key=api_key,
                 base_url=base_url,
                 timeout=30.0,
-                max_retries=2
+                max_retries=2,
+                http_client=httpx.AsyncClient(trust_env=False, timeout=30.0),
             )
 
         self.model = model
@@ -377,7 +379,7 @@ class AuthorSearcher:
             }
 
             # ── 查询缓存（取出已有字段供后续各步使用）────────────────────────
-            cached = self.author_cache.get(paper_link, paper_title) if self.author_cache else None
+            cached = (await self.author_cache.get(paper_link, paper_title)) if self.author_cache else None
 
             # ── Step 1: 作者列表及单位 ────────────────────────────────────────
             if cached and cached.get('Searched Author-Affiliation'):
@@ -639,6 +641,8 @@ class AuthorSearcher:
             errors = [r for r in results if isinstance(r, Exception)]
             if errors:
                 self.log_callback(f"⚠️ 有 {len(errors)} 个任务失败")
+                for i, err in enumerate(errors[:3]):
+                    self.log_callback(f"  错误 {i+1}: {type(err).__name__}: {err}")
 
             # 过滤出成功的结果并排序
             successful_results = [r for r in results if not isinstance(r, Exception) and r[1]]

@@ -32,7 +32,9 @@ class GoogleScholarHtmlParser:
                 'paper_title': '',
                 'paper_year': None,
                 'citation': '',
-                'authors': {}
+                'authors': {},
+                'gs_pdf_link': '',      # GS 右侧的 [PDF] 直链
+                'gs_all_versions': '',  # "所有 X 个版本" 链接
             }
 
             # 提取标题和链接
@@ -47,7 +49,6 @@ class GoogleScholarHtmlParser:
                 paper_record['paper_title'] = title_link.get_text(strip=True)
             else:
                 # [引用] 条目：无链接
-                # 先移除 gs_ctu span（如 [引用][C]），再取剩余文本作为标题
                 ctu_span = title_tag.find('span', class_='gs_ctu')
                 if ctu_span:
                     ctu_span.decompose()
@@ -55,6 +56,13 @@ class GoogleScholarHtmlParser:
 
             if not paper_record['paper_title']:
                 continue
+
+            # 提取右侧 PDF 直链（[PDF] arxiv.org 等）
+            pdf_side = result.select_one('div.gs_or_ggsm a, div.gs_ggs a')
+            if pdf_side:
+                href = pdf_side.get('href', '')
+                if href:
+                    paper_record['gs_pdf_link'] = href
 
             # 提取作者（有 Google Scholar 主页链接的作者）
             author_links = result.select('div.gs_a a[href*="citations?"]')
@@ -65,6 +73,22 @@ class GoogleScholarHtmlParser:
                     author_href = f'https://scholar.google.com{author_href}'
                 paper_record['authors'][f'author_{i}_{author_name}'] = author_href
 
+            # 兜底：从 gs_a 文本提取所有作者名（含无主页链接的）
+            # gs_a 格式: "A Smith, B Jones, C Lee - Journal, 2024 - publisher.com"
+            if not paper_record['authors']:
+                gs_a = result.select_one('div.gs_a')
+                if gs_a:
+                    meta_text = gs_a.get_text(" ", strip=True)
+                    # Split on " - " to get author part (before first dash)
+                    author_part = meta_text.split(' - ')[0].strip()
+                    # Split authors by comma
+                    raw_names = [n.strip() for n in author_part.split(',') if n.strip()]
+                    # Filter out year-like strings and "…"
+                    for i, name in enumerate(raw_names):
+                        name = name.strip('… ').strip()
+                        if name and len(name) > 1 and not name.isdigit():
+                            paper_record['authors'][f'author_{i}_{name}'] = ''
+
             # 提取引用次数
             cite_links = result.select('div.gs_fl a[href*="cites="]')
             for cite_link in cite_links:
@@ -73,14 +97,25 @@ class GoogleScholarHtmlParser:
                     paper_record['citation'] = cite_text
                     break
 
+            # 提取"所有 X 个版本"链接
+            fl_links = result.select('div.gs_fl a, div.gs_fl.gs_flb a')
+            for fl_link in fl_links:
+                text = fl_link.get_text(strip=True)
+                if '版本' in text or 'version' in text.lower():
+                    href = fl_link.get('href', '')
+                    if href:
+                        if not href.startswith('http'):
+                            href = f'https://scholar.google.com{href}'
+                        paper_record['gs_all_versions'] = href
+                    break
+
             # ---- 年份提取 ----
-            pat_strict = re.compile(r',\s*((?:19|20)\d{2})\s*-')  # 更精确：", 2023 -"
-            pat_loose = re.compile(r'\b(?:19|20)\d{2}\b')  # 兜底：任意 19xx/20xx
+            pat_strict = re.compile(r',\s*((?:19|20)\d{2})\s*-')
+            pat_loose = re.compile(r'\b(?:19|20)\d{2}\b')
             gs_a = result.select_one('div.gs_a')
             year: Optional[int] = None
             if gs_a:
                 meta_text = gs_a.get_text(" ", strip=True)
-
                 m = pat_strict.search(meta_text)
                 if m:
                     year = int(m.group(1))

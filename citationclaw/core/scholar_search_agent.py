@@ -121,14 +121,21 @@ class ScholarSearchAgent:
         )
 
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                timeout=60.0,
+            import asyncio as _aio
+            response = await _aio.wait_for(
+                self._client.chat.completions.create(
+                    model=self._model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    timeout=60.0,
+                ),
+                timeout=90.0,  # Hard asyncio timeout as safety net
             )
             text = response.choices[0].message.content.strip()
             return self._parse_response(text)
+        except asyncio.TimeoutError:
+            self._log(f"    ⚠ 搜索LLM超时 (90s)")
+            return []
         except Exception as e:
             self._log(f"    ⚠ 搜索LLM调用失败: {e}")
             return []
@@ -226,6 +233,41 @@ class ScholarSearchAgent:
             'il': '以色列', 'israel': '以色列',
             'hk': '中国香港', 'hong kong': '中国香港',
             'tw': '中国台湾', 'taiwan': '中国台湾',
+            # Extended: more ISO codes and common names
+            'bd': '孟加拉国', 'bangladesh': '孟加拉国',
+            'br': '巴西', 'brazil': '巴西',
+            'mx': '墨西哥', 'mexico': '墨西哥',
+            'ru': '俄罗斯', 'russia': '俄罗斯',
+            'za': '南非', 'south africa': '南非',
+            'eg': '埃及', 'egypt': '埃及',
+            'pk': '巴基斯坦', 'pakistan': '巴基斯坦',
+            'ir': '伊朗', 'iran': '伊朗',
+            'tr': '土耳其', 'turkey': '土耳其', 'türkiye': '土耳其',
+            'th': '泰国', 'thailand': '泰国',
+            'vn': '越南', 'vietnam': '越南',
+            'my': '马来西亚', 'malaysia': '马来西亚',
+            'id': '印度尼西亚', 'indonesia': '印度尼西亚',
+            'ph': '菲律宾', 'philippines': '菲律宾',
+            'pl': '波兰', 'poland': '波兰',
+            'at': '奥地利', 'austria': '奥地利',
+            'be': '比利时', 'belgium': '比利时',
+            'dk': '丹麦', 'denmark': '丹麦',
+            'fi': '芬兰', 'finland': '芬兰',
+            'no': '挪威', 'norway': '挪威',
+            'ie': '爱尔兰', 'ireland': '爱尔兰',
+            'pt': '葡萄牙', 'portugal': '葡萄牙',
+            'gr': '希腊', 'greece': '希腊',
+            'cz': '捷克', 'czech republic': '捷克', 'czechia': '捷克',
+            'ro': '罗马尼亚', 'romania': '罗马尼亚',
+            'nz': '新西兰', 'new zealand': '新西兰',
+            'cl': '智利', 'chile': '智利',
+            'ar': '阿根廷', 'argentina': '阿根廷',
+            'co': '哥伦比亚', 'colombia': '哥伦比亚',
+            'sa': '沙特阿拉伯', 'saudi arabia': '沙特阿拉伯',
+            'ae': '阿联酋', 'uae': '阿联酋', 'united arab emirates': '阿联酋',
+            'qa': '卡塔尔', 'qatar': '卡塔尔',
+            'mo': '中国澳门', 'macao': '中国澳门', 'macau': '中国澳门',
+            'lu': '卢森堡', 'luxembourg': '卢森堡',
         }
         # Try direct lookup
         key = s.lower().strip()
@@ -237,7 +279,33 @@ class ScholarSearchAgent:
             fk = first.lower().strip()
             if fk in _map:
                 return _map[fk]
-        return s  # Return as-is if already Chinese or unrecognized
+        # If already Chinese country name (2-5 chars), return as-is
+        if 1 < len(s) <= 6 and all('\u4e00' <= c <= '\u9fff' for c in s):
+            return s
+        return s  # Return as-is if unrecognized
+
+    @staticmethod
+    def _is_valid_country(value: str) -> bool:
+        """Check if a value looks like a valid country label (not a job title/affiliation)."""
+        v = value.strip()
+        if not v:
+            return True  # Empty is OK (means unknown)
+        # Valid: short text (≤8 chars for Chinese, ≤30 for English)
+        if len(v) <= 8:
+            return True
+        # Invalid: contains job-related keywords → not a country
+        invalid_keywords = [
+            '研究员', '教授', '主任', '院长', '校长', '所长', '博士', '工程师',
+            '实验室', '研究院', '研究所', '大学', '学院', 'University',
+            'Professor', 'Director', 'Researcher', 'Lab', 'Institute',
+            'Fellow', '杰青', '长江', '优青', '万人', '特聘',
+        ]
+        if any(k in v for k in invalid_keywords):
+            return False
+        # Invalid: too long to be a country name
+        if len(v) > 30:
+            return False
+        return True
 
     @staticmethod
     def _extract_name_keys(name: str) -> set:

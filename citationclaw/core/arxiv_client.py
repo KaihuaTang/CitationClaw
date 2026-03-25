@@ -29,11 +29,7 @@ class ArxivClient:
         entries = self._parse_feed(resp.text)
         if not entries:
             return None
-        # Validate title similarity (arXiv search is fuzzy, may return wrong paper)
-        result = entries[0]
-        if not self._titles_match(title, result.get("title", "")):
-            return None
-        return result
+        return entries[0]
 
     @staticmethod
     def _titles_match(query: str, result: str, threshold: float = 0.7) -> bool:

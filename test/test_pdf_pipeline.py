@@ -21,7 +21,7 @@ def test_downloader_and_parser_integration(tmp_path):
 
     # Verify parser handles missing fitz gracefully
     contexts = parser.extract_citation_contexts(
-        cached_path, "Some Target Paper", ["Author A"]
+        cached_path, "Some Target Paper", [{"name": "Author A"}]
     )
     # Should return empty list (no PDF to parse or fitz not installed)
     assert isinstance(contexts, list)
@@ -49,13 +49,13 @@ References
 [1] Ashish Vaswani et al. Attention is All You Need. NeurIPS 2017.
 [2] Jacob Devlin et al. BERT. NAACL 2019.
 """
-    ref_id = parser._find_reference_id(text, "Attention is All You Need", ["Vaswani"])
-    assert ref_id == "[1]"
-
-    contexts = parser._extract_contexts(text, ref_id, "Attention is All You Need")
+    # Use extract_from_text (new API)
+    contexts = parser.extract_from_text(
+        text, "Attention is All You Need",
+        [{"name": "Ashish Vaswani"}], target_year=2017, context_window=0,
+    )
     assert len(contexts) >= 2
 
     # Verify section detection
-    for ctx in contexts:
-        section = parser._detect_section(ctx)
-        assert section in ["Introduction", "Related Work", "Method", "Abstract", "Unknown"]
+    sections = {c["section"] for c in contexts}
+    assert sections & {"Introduction", "Related Work", "Method"}

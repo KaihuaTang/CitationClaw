@@ -655,12 +655,15 @@ function initIndexPage() {
                 // If saved model doesn't match any search option, use default
                 if (!searchSelect.value) searchSelect.value = 'gemini-3-flash-preview-search';
             }
+            if (el('idx-result-folder-prefix')) el('idx-result-folder-prefix').value = cfg.result_folder_prefix || '';
             if (el('idx-output-prefix')) el('idx-output-prefix').value = cfg.default_output_prefix || 'paper';
             if (el('idx-renowned-scholar')) el('idx-renowned-scholar').checked = cfg.enable_renowned_scholar_filter !== false;
             if (el('idx-author-verify')) el('idx-author-verify').checked = cfg.enable_author_verification || false;
             if (el('idx-dashboard')) el('idx-dashboard').checked = cfg.enable_dashboard !== false;
             if (el('idx-service-tier')) el('idx-service-tier').value = cfg.service_tier || 'basic';
             if (el('idx-dashboard-model')) el('idx-dashboard-model').value = cfg.dashboard_model || 'gemini-3-flash-preview-nothinking';
+            if (el('idx-s2-api-key')) el('idx-s2-api-key').value = cfg.s2_api_key || '';
+            if (el('idx-mineru-token')) el('idx-mineru-token').value = cfg.mineru_api_token || '';
             if (el('idx-api-access-token')) el('idx-api-access-token').value = cfg.api_access_token || '';
             if (el('idx-api-user-id')) el('idx-api-user-id').value = cfg.api_user_id || '';
         } catch (e) {
@@ -691,6 +694,7 @@ function initIndexPage() {
                 openai_api_key: el('idx-openai-key')?.value || '',
                 openai_base_url: el('idx-openai-url')?.value || '',
                 openai_model: el('idx-openai-model')?.value || '',
+                result_folder_prefix: el('idx-result-folder-prefix')?.value || '',
                 default_output_prefix: el('idx-output-prefix')?.value || 'paper',
                 enable_renowned_scholar_filter: el('idx-renowned-scholar')?.checked || false,
                 enable_author_verification: el('idx-author-verify')?.checked || false,
@@ -704,14 +708,20 @@ function initIndexPage() {
                     full:     { enable_citing_description: true,  citing_description_scope: 'all',           dashboard_skip_citing_analysis: false },
                 }[el('idx-service-tier')?.value || 'basic']),
                 dashboard_model: el('idx-dashboard-model')?.value || '',
+                s2_api_key: el('idx-s2-api-key')?.value || '',
+                mineru_api_token: el('idx-mineru-token')?.value || '',
                 api_access_token: el('idx-api-access-token')?.value || '',
                 api_user_id: el('idx-api-user-id')?.value || '',
             };
+            // Debug: log what we're about to save
+            if (body.mineru_api_token) console.log('[CONFIG] MinerU token to save:', body.mineru_api_token.substring(0, 8) + '...');
             const cfgResp = await safeFetch('/api/config');
             const existing = await cfgResp.json();
-            // 费用追踪字段：空值不覆盖已有配置
+            // 敏感字段：空值不覆盖已有配置
             if (!body.api_access_token && existing.api_access_token) delete body.api_access_token;
             if (!body.api_user_id && existing.api_user_id) delete body.api_user_id;
+            if (!body.s2_api_key && existing.s2_api_key) delete body.s2_api_key;
+            if (!body.mineru_api_token && existing.mineru_api_token) delete body.mineru_api_token;
             const merged = Object.assign({}, existing, body);
             const resp = await safeFetch('/api/config', {
                 method: 'POST',
@@ -732,6 +742,9 @@ function initIndexPage() {
             _savingConfig = false;
         }
     }
+
+    // Expose for global access (used by fetchScholarPapers in index.html)
+    window.saveIndexConfig = saveIndexConfig;
 
     // ─── Service Tier Preset Logic ───
     const tierSelect = document.getElementById('idx-service-tier');

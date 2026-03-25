@@ -203,6 +203,19 @@
     </div>
   </div>
 
+  <!-- MinerU Cloud API (可选) -->
+  <div style="margin-top:12px;display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--surface);border:1px solid var(--border2);border-radius:8px">
+    <span style="font-size:12px;color:var(--light);white-space:nowrap">
+      <i class="bi bi-file-earmark-pdf" style="color:var(--accent)"></i> MinerU API Token
+      <span style="font-size:11px;color:var(--text-light)">(可选，大文件 >20 页时使用精准 API)</span>
+    </span>
+    <input type="text" id="idx-mineru-token" class="form-control form-control-sm"
+           placeholder="留空则使用免费 Agent API（≤20页）或本地解析" autocomplete="off"
+           style="flex:1;font-size:12px;max-width:360px">
+    <a href="https://mineru.net/apiManage" target="_blank" rel="noopener"
+       style="font-size:11px;color:var(--accent);white-space:nowrap;text-decoration:none">获取 Token →</a>
+  </div>
+
   <!-- 更多配置折叠 -->
   <div style="margin-top:10px">
     <button class="btn-agent-sm" type="button"
@@ -218,6 +231,10 @@
       <div class="col-md-5">
         <label class="form-label">Semantic Scholar API Key <span style="color:var(--light);font-weight:400">(可选)</span></label>
         <input type="text" id="idx-s2-api-key" class="form-control form-control-sm" placeholder="留空使用免费配额" autocomplete="off">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">结果文件夹前缀</label>
+        <input type="text" id="idx-result-folder-prefix" class="form-control form-control-sm" placeholder="留空则默认 result-时间戳">
       </div>
       <div class="col-md-3">
         <label class="form-label">输出文件前缀</label>
@@ -1021,24 +1038,8 @@ async function fetchScholarPapers() {
     const btn = document.getElementById('scholar-fetch-btn');
     btn.disabled = true; btn.textContent = '获取中…';
     document.getElementById('scholar-result-area').style.display = 'none';
-    // 直接将当前填写的两个 key 写入后端配置，无需手动保存
-    try {
-        const scraperKeys = (document.getElementById('idx-scraper-keys').value || '')
-            .split(',').map(k => k.trim()).filter(Boolean);
-        const openaiKey = document.getElementById('idx-openai-key').value || '';
-        if (scraperKeys.length || openaiKey) {
-            const cfgResp = await fetch('/api/config');
-            const existing = await cfgResp.json();
-            const patch = Object.assign({}, existing);
-            if (scraperKeys.length) patch.scraper_api_keys = scraperKeys;
-            if (openaiKey) patch.openai_api_key = openaiKey;
-            await fetch('/api/config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(patch)
-            });
-        }
-    } catch(e) { console.error('自动保存配置失败:', e); }
+    // 自动保存当前所有配置（复用主保存函数）
+    try { await saveIndexConfig(); } catch(e) { console.error('自动保存配置失败:', e); }
     try {
         const res = await fetch('/api/scholar/papers', {
             method: 'POST',

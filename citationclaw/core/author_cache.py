@@ -135,7 +135,7 @@ class AuthorInfoCache:
         # Filter to cacheable fields and exclude ERROR sentinel values
         to_write = {
             k: v for k, v in fields.items()
-            if k in CACHEABLE_FIELDS and v not in _ERROR_SENTINELS
+            if k in CACHEABLE_FIELDS and (isinstance(v, (list, dict)) or v not in _ERROR_SENTINELS)
         }
         if not to_write:
             return

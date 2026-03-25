@@ -1,5 +1,5 @@
 """
-CitationClaw — 论文被引画像分析🦞
+CitationClaw v2 — 论文被引画像分析🦞
 
 Usage:
     citationclaw          # start web server at http://127.0.0.1:8000
@@ -40,7 +40,7 @@ def _wait_for_server(host: str, port: int, timeout: float = 15.0) -> bool:
 def main():
     parser = argparse.ArgumentParser(
         prog="citationclaw",
-        description="CitationClaw — 论文被引画像分析🦞",
+        description="CitationClaw v2 — 论文被引画像分析🦞",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
@@ -65,7 +65,7 @@ def main():
         print(f"  或先关闭占用该端口的程序。\n")
         sys.exit(1)
 
-    print(f"\n  CitationClaw 🦞  →  http://{args.host}:{args.port}\n")
+    print(f"\n  CitationClaw v2 🦞  →  http://{args.host}:{args.port}\n")
 
     if not args.no_browser:
         def _open_browser():
@@ -86,7 +86,7 @@ def main():
             log_level="warning",
         )
     except KeyboardInterrupt:
-        print("\nCitationClaw stopped.")
+        print("\nCitationClaw v2 stopped.")
 
 
 if __name__ == "__main__":

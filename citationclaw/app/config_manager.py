@@ -30,6 +30,7 @@ class AppConfig(BaseModel):
     openai_model: str = Field(default="gemini-3-flash-preview-search", description="模型名称")
 
     # 任务配置
+    result_folder_prefix: str = Field(default="", description="结果文件夹前缀（留空则默认 result-时间戳）")
     default_output_prefix: str = Field(default="paper", description="默认输出文件前缀")
     sleep_between_pages: int = Field(default=10, description="翻页间隔（秒）")
     sleep_between_authors: float = Field(default=0.5, description="搜索作者间隔（秒）")
@@ -135,6 +136,12 @@ class AppConfig(BaseModel):
 
     dashboard_model: str = Field(default="gemini-3-flash-preview-nothinking",
                                  description="画像报告 LLM 分析使用的模型")
+
+    # Semantic Scholar API Key (提升速率限制: 1 req/s → 10-100 req/s)
+    s2_api_key: str = Field(default="", description="Semantic Scholar API Key（可选，大幅提升 PDF 下载成功率）")
+
+    # MinerU Cloud API
+    mineru_api_token: str = Field(default="", description="MinerU Cloud Precision API Token（可选，用于大文件解析）")
 
     # 费用追踪配置
     api_access_token: str = Field(default="", description="API中转站系统令牌（用于查询额度，在个人中心获取）")

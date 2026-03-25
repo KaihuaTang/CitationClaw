@@ -21,6 +21,8 @@ class PipelineAdapter:
                     "paper_year": paper_info.get("paper_year"),
                     "citation": paper_info.get("citation", "0"),
                     "authors_raw": paper_info.get("authors", {}),
+                    "gs_pdf_link": paper_info.get("gs_pdf_link", ""),
+                    "gs_all_versions": paper_info.get("gs_all_versions", ""),
                 })
         return papers
 
@@ -46,6 +48,8 @@ class PipelineAdapter:
         record_index: int,
         api_authors_snapshot: Optional[list] = None,
         pdf_authors_snapshot: Optional[list] = None,
+        pdf_downloaded: bool = False,
+        pdf_path: str = "",
     ) -> dict:
         """Convert new pipeline data into legacy {index: record} format.
 
@@ -145,27 +149,35 @@ class PipelineAdapter:
             paper.get("authors_raw", {}), ensure_ascii=False
         )
 
+        # Sanitize: replace nan/None with empty string
+        def _clean(val):
+            s = str(val or "").strip()
+            return "" if s.lower() in ("nan", "none") else s
+
         record = {
-            "PageID": paper.get("page_id", ""),
-            "PaperID": paper.get("paper_id", ""),
-            "Paper_Title": paper.get("paper_title", ""),
+            # ── 核心信息（用户关注）──
+            "Paper_Title": _clean(paper.get("paper_title", "")),
             "Paper_Year": paper.get("paper_year"),
-            "Paper_Link": paper.get("paper_link", ""),
-            "Citations": paper.get("citation", "0"),
-            "Authors_with_Profile": authors_with_profile,
-            "Searched Author-Affiliation": searched_affiliation,
-            "First_Author_Institution": first_inst,
-            "First_Author_Country": first_country,
-            "Citing_Paper": citing_paper,
+            "Venue": _clean((metadata or {}).get("venue", "")),
+            "Paper_Link": _clean(paper.get("paper_link", "")),
+            "doi": _clean((metadata or {}).get("doi", "")),
+            "Citations": _clean(paper.get("citation", "0")),
+            "Citing_Paper": _clean(citing_paper),
             "Is_Self_Citation": self_citation.get("is_self_citation", False),
-            "Searched Author Information": searched_info,
-            "Author Verification": "",
-            "Renowned Scholar": renowned_text.strip(),
+            # ── 作者与机构（最终合并版）──
+            "Authors_Affiliation": _clean(searched_affiliation),
+            "First_Author_Institution": _clean(first_inst),
+            "First_Author_Country": _clean(first_country),
+            # ── 知名学者 ──
+            "Renowned Scholar": _clean(renowned_text),
             "Formated Renowned Scholar": formatted_scholars,
+            # ── PDF 与数据来源 ──
+            "PDF_Download": pdf_downloaded,
+            "pdf_url": _clean((metadata or {}).get("pdf_url", "")),
             "Data_Sources": ",".join(sources),
-            "pdf_url": (metadata or {}).get("pdf_url", ""),
-            "doi": (metadata or {}).get("doi", ""),
-            "API_Authors_Raw": api_affil_str,
-            "PDF_Authors_Raw": pdf_affil_str,
+            # ── 调试/审计字段（隐藏在最后）──
+            "API_Authors": _clean(api_affil_str),
+            "PDF_Authors": _clean(pdf_affil_str),
+            "PDF_Path": _clean(pdf_path),
         }
         return {str(record_index): record}

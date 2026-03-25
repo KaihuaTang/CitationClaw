@@ -25,20 +25,20 @@ class OpenAlexClient:
         results = data.get("results", [])
         if not results:
             return None
-        parsed = self._parse_work(results[0])
-        # Validate title similarity to avoid returning wrong papers
-        if not self._titles_match(title, parsed.get("title", "")):
-            return None
-        return parsed
+        return self._parse_work(results[0])
 
     @staticmethod
-    def _titles_match(query: str, result: str, threshold: float = 0.7) -> bool:
+    def _titles_match(query: str, result: str, threshold: float = 0.45) -> bool:
         """Check if result title is similar enough to query (word overlap)."""
         import re as _re
-        q_words = set(_re.sub(r'[^\w\s]', ' ', query.lower()).split())
-        r_words = set(_re.sub(r'[^\w\s]', ' ', result.lower()).split())
+        _stop = {'a', 'an', 'the', 'of', 'in', 'on', 'for', 'and', 'or', 'to',
+                 'with', 'by', 'is', 'are', 'from', 'at', 'as', 'its', 'via', 'using'}
+        q_words = set(_re.sub(r'[^\w\s]', ' ', query.lower()).split()) - _stop
+        r_words = set(_re.sub(r'[^\w\s]', ' ', result.lower()).split()) - _stop
         if not q_words:
-            return False
+            return True
+        if len(q_words) <= 3:
+            return len(q_words & r_words) >= 1
         return len(q_words & r_words) / len(q_words) >= threshold
 
     async def get_author(self, author_id: str) -> Optional[dict]:
@@ -77,6 +77,7 @@ class OpenAlexClient:
                 "country": inst.get("country_code", ""),
             })
         oa_loc = work.get("best_oa_location") or {}
+        venue = work.get("primary_location", {}).get("source", {}).get("display_name", "")
         return {
             "title": work.get("title", ""),
             "year": work.get("publication_year"),
@@ -85,6 +86,7 @@ class OpenAlexClient:
             "openalex_id": work.get("id", ""),
             "authors": authors,
             "oa_pdf_url": oa_loc.get("pdf_url", ""),
+            "venue": venue,
             "source": "openalex",
         }
 
@@ -100,6 +102,29 @@ class OpenAlexClient:
             "affiliation": current.get("institution", {}).get("display_name", ""),
             "source": "openalex",
         }
+
+    async def search_author_by_name(self, name: str) -> Optional[dict]:
+        """Search for an author by display name via OpenAlex Authors API.
+
+        Returns parsed author dict with h_index, affiliation, etc., or None.
+        """
+        import re as _re
+        clean = _re.sub(r'[:\-,;\'\"()（）\[\]]', ' ', name)
+        clean = ' '.join(clean.split())
+        if not clean or len(clean) < 2:
+            return None
+        url = f"{BASE_URL}/authors?filter=display_name.search:{quote(clean)}&per_page=1"
+        try:
+            resp = await self._client.get(url, params=self._params)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                return None
+            return self._parse_author(results[0])
+        except Exception:
+            return None
 
     async def close(self):
         await self._client.aclose()

@@ -115,18 +115,27 @@ class CitingDescriptionCache:
         paper_title: str,
         citing_paper: str,
         description: str,
+        source: Optional[str] = None,
     ):
-        """将新搜索到的引用描述写入缓存。Skips 'NONE' sentinel values."""
+        """将新搜索到的引用描述写入缓存。Skips 'NONE' sentinel values.
+
+        Args:
+            source: Optional tag indicating how the description was obtained
+                    (e.g. "pdf", "llm", "cache"). Stored alongside the entry.
+        """
         if description in _NONE_SENTINELS:
             return
         key = self.make_key(paper_link, paper_title, citing_paper)
         async with self._get_lock():
-            self._data[key] = {
+            entry = {
                 "paper_title": paper_title,
                 "citing_paper": citing_paper,
                 "Citing_Description": description,
                 "cached_at": datetime.now().isoformat(),
             }
+            if source is not None:
+                entry["source"] = source
+            self._data[key] = entry
             self._updates += 1
             self._pending += 1
             if self._pending >= self.WRITE_EVERY:

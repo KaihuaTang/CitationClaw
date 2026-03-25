@@ -17,6 +17,9 @@ build/
 venv/
 env/
 
+# MinerU local models (symlinked, ~2GB)
+data/models/
+
 # Runtime outputs (keep result-template examples)
 data/result-*/
 !data/result-template1/
@@ -27,15 +30,18 @@ data/cache/
 config.json
 .superpowers/
 
-# Local-only files (PyPI publishing & Claude instructions)
+# Local-only files (Claude instructions)
 CLAUDE.md
-publish.sh
-pyproject.toml
-homepage-preview*.png
-teaser-full.png
-teaser-charts.png
-docs/assets/ui-full.png
-CitationClaw_icon.png
 .playwright-mcp/
 debug/
-docs/superpowers/
+
+# Docs build artifacts (keep final outputs)
+docs/node_modules/
+docs/package.json
+docs/package-lock.json
+docs/*.js
+docs/*.html
+docs/.~*
+
+# Office temp files
+~$*

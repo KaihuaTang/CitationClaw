@@ -78,10 +78,10 @@ class TaskExecutor:
         output_prefix: str,
         config: AppConfig,
         canonical_titles: List[str] = None,
-    ) -> Optional[Tuple[Path, Path, Path]]:
+    ) -> Optional[Tuple[Path, Path, Path, list]]:
         """New Phase 2 (structured API metadata) + Phase 3 (scholar assess) pipeline.
 
-        Returns: (merged_jsonl, excel_file, json_file) or None on failure.
+        Returns: (merged_jsonl, excel_file, json_file, pdf_paths) or None on failure.
         """
         adapter = PipelineAdapter()
         metadata_cache = MetadataCache()
@@ -108,7 +108,15 @@ class TaskExecutor:
 
         # ── Phase 2b: 作者信息采集 (structured APIs) ──
         self.log_manager.info("=" * 50)
-        self.log_manager.info("Phase 2 · 作者信息采集: 通过 OpenAlex / S2 / arXiv 查询结构化数据")
+        _s2_key = getattr(config, 's2_api_key', '') or ''
+        if _s2_key:
+            self.log_manager.info(
+                f"Phase 2 · 作者信息采集: S2 优先模式 (API Key: {_s2_key[:6]}***) — 高速并行查询"
+            )
+        else:
+            self.log_manager.info(
+                "Phase 2 · 作者信息采集: S2 优先模式 (无 API Key — 免费限速 1req/s，建议填入 S2 Key 提速)"
+            )
         self.log_manager.info("=" * 50)
 
         # Flatten all Phase 1 files into papers
@@ -158,12 +166,14 @@ class TaskExecutor:
                 if self.should_cancel:
                     return
                 title = paper["paper_title"]
+                paper_link = paper.get("paper_link", "")
                 cached = await metadata_cache.get(title=title)
                 if cached:
                     metadata = cached
                     api_hits += 1
                 else:
-                    metadata = await collector.collect(title)
+                    # S2-first: search by title, then by URL if title miss
+                    metadata = await collector.collect(title, paper_url=paper_link)
                     if metadata:
                         await metadata_cache.update(metadata.get("doi", ""), title, metadata)
                     api_queries += 1
@@ -180,14 +190,46 @@ class TaskExecutor:
 
         # Build records_data in order and log sequentially
         records_data: List[Tuple[dict, Optional[dict], str]] = []
+        gs_fallback_count = 0
         for idx, (orig_i, paper, canonical) in enumerate(deduped_papers):
             metadata = results_slots[idx]
-            src_tag = ",".join((metadata or {}).get("sources", [])) or "Scholar"
-            if metadata and any(k in src_tag for k in ["openalex", "s2", "arxiv"]):
-                pass  # API result
-            elif metadata:
-                src_tag = "缓存" if api_hits > 0 else src_tag
-            n_authors = len((metadata or {}).get("authors", []))
+
+            # Build GS author list from Phase 1 data (always available as fallback)
+            import re as _re
+            gs_authors = []
+            for key in (paper.get("authors_raw") or {}):
+                m = _re.match(r'author_\d+_(.*)', key)
+                name = m.group(1) if m else key
+                if name:
+                    gs_authors.append({"name": name, "affiliation": "", "country": ""})
+
+            if metadata is None:
+                # All APIs failed → build from GS data entirely
+                gs_fallback_count += 1
+                metadata = {
+                    "title": paper.get("paper_title", ""),
+                    "year": paper.get("paper_year"),
+                    "doi": "", "s2_id": "", "arxiv_id": "",
+                    "cited_by_count": 0, "influential_citation_count": 0,
+                    "pdf_url": "", "oa_pdf_url": "", "venue": "",
+                    "authors": gs_authors,
+                    "sources": ["scholar"],
+                }
+            elif not metadata.get("authors") and gs_authors:
+                # API found paper but returned no authors → use GS authors
+                metadata["authors"] = gs_authors
+
+            # Final check: if STILL no authors, try filtering empty-name entries
+            # (S2 sometimes returns authors with IDs but no names)
+            if metadata.get("authors"):
+                valid_authors = [a for a in metadata["authors"] if a.get("name", "").strip()]
+                if not valid_authors and gs_authors:
+                    metadata["authors"] = gs_authors
+                elif valid_authors:
+                    metadata["authors"] = valid_authors
+
+            src_tag = ",".join(metadata.get("sources", [])) or "scholar"
+            n_authors = len(metadata.get("authors", []))
             self.log_manager.info(
                 f"  [{idx+1}/{total}] [{src_tag}] {paper['paper_title'][:55]}... ({n_authors} 位作者)"
             )
@@ -206,9 +248,38 @@ class TaskExecutor:
             records_data.append((paper, metadata, canonical))
             self.log_manager.update_progress(idx + 1, total)
 
+        api_found = len(records_data) - gs_fallback_count
         self.log_manager.success(
-            f"Phase 2 完成: 缓存命中 {api_hits} / 新查询 {api_queries} / "
-            f"共 {len(records_data)} 篇"
+            f"Phase 2 完成: API找到 {api_found} / GS兜底 {gs_fallback_count} / "
+            f"缓存 {api_hits} / 共 {len(records_data)} 篇"
+        )
+        if gs_fallback_count > len(records_data) * 0.5:
+            self.log_manager.warning(
+                f"⚠ {gs_fallback_count} 篇论文 API 未找到（S2/OpenAlex 均未收录），"
+                f"作者信息仅来自 Google Scholar（无机构），PDF 下载来源有限"
+            )
+
+        # ── Self-citation detection (BEFORE PDF download — skip downloading self-citations) ──
+        self.log_manager.info("[自引检测] 标记自引论文...")
+        self_cite_map: dict = {}  # index → bool
+        self_cite_count = 0
+        for i, (paper, metadata, canonical) in enumerate(records_data):
+            target_authors = target_authors_map.get(canonical, [])
+            paper_authors = (metadata or {}).get("authors", [])
+            result = self_cite_detector.check(target_authors, paper_authors)
+            is_self = result.get("is_self_citation", False)
+            self_cite_map[i] = is_self
+            if is_self:
+                self_cite_count += 1
+                matched = result.get("matched_pair", ("?", "?"))
+                self.log_manager.info(
+                    f"  ↩️ 自引: {paper.get('paper_title', '')[:40]}... "
+                    f"(匹配: {matched[0]} ↔ {matched[1]})"
+                )
+
+        non_self_count = len(records_data) - self_cite_count
+        self.log_manager.info(
+            f"[自引检测] {self_cite_count} 篇自引 / {non_self_count} 篇需分析 / {len(records_data)} 篇总计"
         )
 
         # Snapshot API authors NOW — before any enrichment (for Excel comparison)
@@ -298,38 +369,9 @@ class TaskExecutor:
                 f"共 {len(author_details)} 位查到详情"
             )
 
-        # S2 Author API fallback for authors still missing affiliation
-        s2_fallback = []
-        for a in all_author_dicts:
-            if not a.get("affiliation") and a.get("s2_id"):
-                name_lower = a.get("name", "").strip().lower()
-                if name_lower not in author_details:  # Not already enriched
-                    s2_fallback.append((name_lower, a.get("s2_id"), a))
-
-        if s2_fallback:
-            self.log_manager.info(f"[S2补充] 查询 {len(s2_fallback)} 位仍缺机构的作者 (Semantic Scholar)...")
-            s2_sem = asyncio.Semaphore(5)  # S2 rate limit lower
-            s2_enriched = 0
-
-            async def _fetch_s2_author(name_lower: str, s2_id: str, author_dict: dict):
-                nonlocal s2_enriched
-                async with s2_sem:
-                    try:
-                        data = await collector.s2.get_author(s2_id)
-                        if data:
-                            if data.get("affiliation") and not author_dict.get("affiliation"):
-                                author_dict["affiliation"] = data["affiliation"]
-                                s2_enriched += 1
-                            if data.get("h_index") and not author_dict.get("h_index"):
-                                author_dict["h_index"] = data["h_index"]
-                            if data.get("citation_count") and not author_dict.get("citation_count"):
-                                author_dict["citation_count"] = data["citation_count"]
-                    except Exception:
-                        pass
-
-            await asyncio.gather(*[_fetch_s2_author(n, s, a) for n, s, a in s2_fallback])
-            if s2_enriched:
-                self.log_manager.info(f"  → S2 补充了 {s2_enriched} 位作者的机构信息")
+        # NOTE: S2 Author API fallback moved to AFTER PDF parse
+        # (PDF extraction provides affiliations for most authors,
+        #  S2 Author API only needed for the remaining few)
 
         await collector.close()
 
@@ -338,8 +380,16 @@ class TaskExecutor:
         self.log_manager.info("Phase 2 · PDF 并行下载 + MinerU 解析 + 作者交叉验证")
         self.log_manager.info("=" * 50)
 
-        downloader = PDFDownloader()
-        parser = MinerUParser()
+        downloader = PDFDownloader(
+            scraper_api_keys=config.scraper_api_keys,
+            llm_api_key=config.openai_api_key,
+            llm_base_url=config.openai_base_url,
+            llm_model=getattr(config, 'dashboard_model', '') or config.openai_model,
+        )
+        parser = MinerUParser(
+            log_callback=self.log_manager.info,
+            mineru_api_token=getattr(config, 'mineru_api_token', ''),
+        )
         parse_cache = PDFParseCache()
         author_extractor = PDFAuthorExtractor(
             api_key=config.openai_api_key,
@@ -351,32 +401,63 @@ class TaskExecutor:
         # Build download-friendly dicts with all URL sources (including GS paper_link)
         dl_papers = []
         for paper, metadata, canonical in records_data:
+            _meta = metadata or {}
             dl_papers.append({
-                "doi": (metadata or {}).get("doi", ""),
-                "pdf_url": (metadata or {}).get("pdf_url", ""),
-                "oa_pdf_url": (metadata or {}).get("oa_pdf_url", ""),
-                "paper_link": paper.get("paper_link", ""),  # GS link to publisher
+                "doi": _meta.get("doi", ""),
+                "pdf_url": _meta.get("pdf_url", ""),
+                "oa_pdf_url": _meta.get("oa_pdf_url", ""),
+                "s2_id": _meta.get("s2_id", ""),
+                "arxiv_id": _meta.get("arxiv_id", ""),
+                "venue": _meta.get("venue", ""),
+                "paper_link": paper.get("paper_link", ""),
+                "gs_pdf_link": paper.get("gs_pdf_link", ""),
+                "gs_all_versions": paper.get("gs_all_versions", ""),
                 "Paper_Title": paper.get("paper_title", ""),
                 "title": paper.get("paper_title", ""),
+                "paper_year": paper.get("paper_year"),
+                "authors_raw": paper.get("authors_raw", {}),
             })
 
-        # Parallel PDF download (10 workers)
-        self.log_manager.info(f"[PDF下载] 并行下载 {len(dl_papers)} 篇 (10 workers)...")
-        pdf_paths = await downloader.batch_download(
-            dl_papers, concurrency=10, log=self.log_manager.info
+        # Parallel PDF download — skip self-citations (saves time + bandwidth)
+        need_download = sum(1 for i in range(len(dl_papers)) if not self_cite_map.get(i, False))
+        self.log_manager.info(
+            f"[PDF下载] 并行下载 {need_download} 篇非自引论文 "
+            f"(跳过 {self_cite_count} 篇自引) (10 workers)..."
         )
-        downloaded = sum(1 for p in pdf_paths if p)
-        self.log_manager.success(f"PDF 下载: {downloaded}/{len(dl_papers)} 篇成功")
 
-        # Parse + extract authors + cross-validate (parallel, 5 workers for MinerU)
+        # Set self-citation papers to None (skip download)
+        async def _dl_if_needed(idx, paper):
+            if self_cite_map.get(idx, False):
+                return None  # Skip self-citation
+            return await downloader.download(paper, log=self.log_manager.info)
+
+        sem = asyncio.Semaphore(10)
+        async def _dl_with_sem(idx, paper):
+            async with sem:
+                return await _dl_if_needed(idx, paper)
+
+        pdf_paths = await asyncio.gather(*[
+            _dl_with_sem(i, p) for i, p in enumerate(dl_papers)
+        ])
+
+        downloaded = sum(1 for i, p in enumerate(pdf_paths) if p and not self_cite_map.get(i, False))
+        failed = need_download - downloaded
+        self.log_manager.success(
+            f"PDF 下载: {downloaded}/{need_download} 篇成功"
+            f"（{failed} 篇失败, {self_cite_count} 篇自引已跳过）"
+        )
+
+        # Parse + extract authors + cross-validate (parallel, 10 workers for Cloud API)
         if downloaded > 0:
-            self.log_manager.info(f"[MinerU] 解析 {downloaded} 篇 PDF (txt模式) + LLM 提取作者...")
-            parse_sem = asyncio.Semaphore(3)  # MinerU is CPU-heavy
+            self.log_manager.info(
+                f"[PDF解析] 并行解析 {downloaded} 篇 PDF (Cloud API → 本地 MinerU → PyMuPDF) + LLM 提取作者..."
+            )
+            parse_sem = asyncio.Semaphore(10)  # Cloud API can handle high concurrency
             validated_count = 0
-            parse_done = 0
+            parse_counter = {"done": 0, "lock": asyncio.Lock()}
 
             async def _parse_and_validate(idx: int):
-                nonlocal validated_count, parse_done
+                nonlocal validated_count
                 pdf_path = pdf_paths[idx]
                 if not pdf_path:
                     return
@@ -389,19 +470,30 @@ class TaskExecutor:
                     if parse_cache.has(pkey):
                         cached_authors = parse_cache.get_authors(pkey)
                         if cached_authors:
-                            pdf_snapshots[idx] = cached_authors  # Save snapshot
+                            pdf_snapshots[idx] = cached_authors
                             api_authors = (metadata or {}).get("authors", [])
                             merged = validator.validate(api_authors, cached_authors)
                             if metadata:
                                 metadata["authors"] = merged
                             validated_count += 1
+                            async with parse_counter["lock"]:
+                                parse_counter["done"] += 1
+                                n = parse_counter["done"]
+                            self.log_manager.info(
+                                f"  [解析 {n}/{downloaded}] 💾 {title[:50]}... (缓存)"
+                            )
                             return
 
-                    # Parse PDF
+                    # Parse PDF (async: Cloud Agent → Cloud Precision → Local → PyMuPDF)
                     try:
-                        parsed = parser.parse(pdf_path, pkey)
+                        parsed = await parser.parse_async(pdf_path, pkey)
                     except Exception as e:
-                        self.log_manager.info(f"  [解析失败] {title[:40]}... : {str(e)[:50]}")
+                        async with parse_counter["lock"]:
+                            parse_counter["done"] += 1
+                            n = parse_counter["done"]
+                        self.log_manager.info(
+                            f"  [解析 {n}/{downloaded}] ⚠ {title[:40]}... 失败: {str(e)[:50]}"
+                        )
                         parsed = None
                     if not parsed:
                         return
@@ -413,9 +505,11 @@ class TaskExecutor:
                         "has_content_list": bool(parsed.get("content_list")),
                     })
 
-                    parse_done += 1
+                    async with parse_counter["lock"]:
+                        parse_counter["done"] += 1
+                        n = parse_counter["done"]
                     self.log_manager.info(
-                        f"  [解析 {parse_done}/{downloaded}] {title[:50]}... "
+                        f"  [解析 {n}/{downloaded}] {title[:50]}... "
                         f"({parsed.get('source','?')})"
                     )
 
@@ -425,7 +519,7 @@ class TaskExecutor:
                     )
                     if pdf_authors:
                         parse_cache.store_authors(pkey, pdf_authors)
-                        pdf_snapshots[idx] = pdf_authors  # Save snapshot
+                        pdf_snapshots[idx] = pdf_authors
 
                         # Cross-validate: PDF affiliation vs API affiliation
                         api_authors = (metadata or {}).get("authors", [])
@@ -441,26 +535,124 @@ class TaskExecutor:
 
         await downloader.close()
 
-        # ── Self-citation detection (before Phase 3, affects all downstream) ──
-        self.log_manager.info("[自引检测] 标记自引论文...")
-        self_cite_map: dict = {}  # index → bool
-        non_self_cite_records = []
-        self_cite_count = 0
-        for i, (paper, metadata, canonical) in enumerate(records_data):
-            target_authors = target_authors_map.get(canonical, [])
-            paper_authors = (metadata or {}).get("authors", [])
-            result = self_cite_detector.check(target_authors, paper_authors)
-            is_self = result.get("is_self_citation", False)
-            self_cite_map[i] = is_self
-            if is_self:
-                self_cite_count += 1
-            else:
-                non_self_cite_records.append((paper, metadata, canonical))
+        # ── S2 Author API: fill missing affiliations (AFTER PDF parse) ──
+        # PDF extraction fills most affiliations. S2 Author API only for remaining.
+        s2_fallback = []
+        _seen_s2 = set()
+        for _, metadata, _ in records_data:
+            if not metadata:
+                continue
+            for a in metadata.get("authors", []):
+                if not a.get("affiliation") and a.get("s2_id"):
+                    nl = a.get("name", "").strip().lower()
+                    if nl and nl not in _seen_s2:
+                        _seen_s2.add(nl)
+                        s2_fallback.append((nl, a["s2_id"], a))
 
-        self.log_manager.info(
-            f"[自引检测] {self_cite_count} 篇自引 / {len(records_data)} 篇总计"
-            f"（自引论文将跳过学者搜索和引文语境提取）"
-        )
+        if s2_fallback:
+            from citationclaw.core.s2_client import S2Client
+            s2_for_authors = S2Client(api_key=getattr(config, 's2_api_key', None))
+            self.log_manager.info(
+                f"[S2补充] 查询 {len(s2_fallback)} 位仍缺机构的作者 (去重后, 并行3)..."
+            )
+            s2_author_sem = asyncio.Semaphore(3)
+            s2_enriched = 0
+
+            async def _fetch_s2_author(nl, s2_id, author_dict):
+                nonlocal s2_enriched
+                async with s2_author_sem:
+                    try:
+                        data = await s2_for_authors.get_author(s2_id)
+                        if data:
+                            if data.get("affiliation") and not author_dict.get("affiliation"):
+                                author_dict["affiliation"] = data["affiliation"]
+                                s2_enriched += 1
+                            if data.get("h_index") and not author_dict.get("h_index"):
+                                author_dict["h_index"] = data["h_index"]
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_fetch_s2_author(n, s, a) for n, s, a in s2_fallback])
+            await s2_for_authors.close()
+            self.log_manager.info(f"  → S2 补充了 {s2_enriched} 位作者的机构信息")
+
+        # ── Phase 2e: 补查 pdf_only 作者的 h-index / ID (OpenAlex Author Search) ──
+        # PDF-only authors have no openalex_id/h_index, would be filtered out by prefilter.
+        # Search OpenAlex Author API by name to enrich them.
+        pdf_only_authors: list = []  # (author_dict_ref, name)
+        for _, metadata, _ in records_data:
+            if not metadata:
+                continue
+            for a in metadata.get("authors", []):
+                if a.get("affiliation_source") == "pdf_only" and not a.get("openalex_id"):
+                    pdf_only_authors.append((a, a.get("name", "")))
+
+        if pdf_only_authors:
+            # Deduplicate by name
+            seen_names: set = set()
+            unique_pdf_only: list = []
+            for a, name in pdf_only_authors:
+                nl = name.strip().lower()
+                if nl and nl not in seen_names:
+                    seen_names.add(nl)
+                    unique_pdf_only.append((a, name))
+
+            self.log_manager.info(
+                f"[PDF作者补查] {len(unique_pdf_only)} 位 PDF-only 作者缺少 h-index/ID，"
+                f"通过 OpenAlex Author API 按姓名补查..."
+            )
+            # Re-open collector for author search (collector was closed above)
+            from citationclaw.core.openalex_client import OpenAlexClient
+            oa_client = OpenAlexClient()
+            enrich_sem = asyncio.Semaphore(10)
+            pdf_only_enriched = 0
+
+            # Build name→detail lookup (search once per unique name)
+            pdf_only_details: dict = {}  # name_lower → author detail dict
+
+            async def _search_pdf_only_author(name: str):
+                async with enrich_sem:
+                    try:
+                        detail = await oa_client.search_author_by_name(name)
+                        if detail:
+                            pdf_only_details[name.strip().lower()] = detail
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_search_pdf_only_author(name) for _, name in unique_pdf_only])
+
+            # Apply enrichment to all pdf_only author dicts across records_data
+            for _, metadata, _ in records_data:
+                if not metadata:
+                    continue
+                for a in metadata.get("authors", []):
+                    if a.get("affiliation_source") != "pdf_only":
+                        continue
+                    nl = a.get("name", "").strip().lower()
+                    detail = pdf_only_details.get(nl)
+                    if not detail:
+                        continue
+                    if detail.get("h_index") and not a.get("h_index"):
+                        a["h_index"] = detail["h_index"]
+                        pdf_only_enriched += 1
+                    if detail.get("openalex_id") and not a.get("openalex_id"):
+                        a["openalex_id"] = detail["openalex_id"]
+                    if detail.get("citation_count") and not a.get("citation_count"):
+                        a["citation_count"] = detail["citation_count"]
+                    # Keep PDF affiliation (more reliable), don't overwrite
+
+            await oa_client.close()
+            self.log_manager.info(
+                f"  → {pdf_only_enriched} 位 PDF-only 作者补充了 h-index"
+                f"（共查到 {len(pdf_only_details)} 位）"
+            )
+
+        # Build non_self_cite_records (self_cite_map already computed above)
+        non_self_cite_records = [
+            (paper, metadata, canonical)
+            for i, (paper, metadata, canonical) in enumerate(records_data)
+            if not self_cite_map.get(i, False)
+        ]
 
         # ── Phase 3: 学者影响力评估（仅非自引论文）──
         self.log_manager.info("=" * 50)
@@ -484,6 +676,13 @@ class TaskExecutor:
         )
 
         # Search candidates per-paper using search LLM (skip self-cite papers)
+        from citationclaw.core.scholar_search_cache import ScholarSearchCache
+        scholar_cache = ScholarSearchCache()
+        cache_stats = scholar_cache.stats()
+        self.log_manager.info(
+            f"[学者缓存] 已加载 {cache_stats['total_entries']} 条历史记录"
+        )
+
         scholar_results: dict = {}  # name → {tier, honors, ...}
         search_agent = ScholarSearchAgent(
             api_key=config.openai_api_key,
@@ -519,6 +718,23 @@ class TaskExecutor:
                 if self.should_cancel:
                     return
 
+                # Check cache first
+                cached_scholars = scholar_cache.get(title)
+                if cached_scholars is not None:
+                    search_done += 1
+                    if cached_scholars:
+                        paper_scholar_map[title.lower().strip()] = cached_scholars
+                        for s in cached_scholars:
+                            name_keys = ScholarSearchAgent._extract_name_keys(s.get("name", ""))
+                            if not (name_keys & global_seen_keys):
+                                global_unique_count += 1
+                            global_seen_keys.update(name_keys)
+                        labels = "; ".join(f"{s['tier']}: {s['name']}" for s in cached_scholars)
+                        self.log_manager.info(f"  [{search_done}/{n_search}] 💾 {title[:45]}... → {labels}")
+                    else:
+                        self.log_manager.info(f"  [{search_done}/{n_search}] 💾 {title[:45]}... → 无知名学者")
+                    return
+
                 # Retry up to 2 times on connection errors
                 raw = []
                 for attempt in range(3):
@@ -538,8 +754,8 @@ class TaskExecutor:
                 search_done += 1
 
                 # Process results immediately (real-time logging)
+                found = []
                 if raw:
-                    found = []
                     for r in raw:
                         if r.name and r.tier:
                             found.append({
@@ -552,14 +768,16 @@ class TaskExecutor:
                             if not (name_keys & global_seen_keys):
                                 global_unique_count += 1
                             global_seen_keys.update(name_keys)
-                    if found:
-                        paper_scholar_map[title.lower().strip()] = found
-                        labels = "; ".join(f"{s['tier']}: {s['name']}" for s in found)
-                        self.log_manager.info(f"  [{search_done}/{n_search}] {title[:45]}... → {labels}")
-                    else:
-                        self.log_manager.info(f"  [{search_done}/{n_search}] {title[:45]}... → 无知名学者")
+
+                if found:
+                    paper_scholar_map[title.lower().strip()] = found
+                    labels = "; ".join(f"{s['tier']}: {s['name']}" for s in found)
+                    self.log_manager.info(f"  [{search_done}/{n_search}] {title[:45]}... → {labels}")
                 else:
                     self.log_manager.info(f"  [{search_done}/{n_search}] {title[:45]}... → 无知名学者")
+
+                # Store to cache (both found and not-found)
+                await scholar_cache.update(title, found)
 
         try:
             await asyncio.gather(*[
@@ -568,10 +786,19 @@ class TaskExecutor:
             ])
         finally:
             await search_agent.close()
+            await scholar_cache.flush()
 
+        cache_final = scholar_cache.stats()
         self.log_manager.success(
             f"Phase 3 完成: {global_unique_count} 位知名学者（去重）/ {n_search} 篇论文"
+            f"（缓存命中 {cache_final['hits']} / 新查询 {cache_final['misses']}）"
         )
+
+        # ── Scholar verification: LLM validates each identified scholar ──
+        if paper_scholar_map and config.openai_api_key:
+            paper_scholar_map = await self._verify_scholars(
+                paper_scholar_map, config
+            )
 
         # ── Build merged JSONL with scholar data ──
         merged_file = result_dir / "merged_authors.jsonl"
@@ -586,6 +813,11 @@ class TaskExecutor:
 
                 self_cite_result = {"is_self_citation": is_self, "method": "pre-checked"}
 
+                # PDF download info
+                _pdf = pdf_paths[i] if i < len(pdf_paths) else None
+                _pdf_ok = _pdf is not None
+                _pdf_rel = str(_pdf) if _pdf else ""
+
                 record_idx += 1
                 record = adapter.to_legacy_record(
                     paper=paper,
@@ -596,8 +828,19 @@ class TaskExecutor:
                     record_index=record_idx,
                     api_authors_snapshot=api_snapshots.get(i),
                     pdf_authors_snapshot=pdf_snapshots.get(i),
+                    pdf_downloaded=_pdf_ok,
+                    pdf_path=_pdf_rel,
                 )
                 f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+
+        # ── Affiliation enrichment: fill 未知机构 via lightweight LLM ──
+        await self._enrich_unknown_affiliations(merged_file, config)
+
+        # ── Data validation: fix country labels & detect non-country content ──
+        self.log_manager.info("[数据校验] 修正国家标签...")
+        fixed_count = await self._validate_and_fix_records(merged_file, config)
+        if fixed_count:
+            self.log_manager.info(f"  → 修正了 {fixed_count} 条记录的国家/字段信息")
 
         # ── Export ──
         self.log_manager.info("Phase 3 · 导出结果")
@@ -611,7 +854,374 @@ class TaskExecutor:
             json_output=json_file,
         )
 
-        return merged_file, excel_file, json_file
+        return merged_file, excel_file, json_file, pdf_paths
+
+    async def _verify_scholars(self, paper_scholar_map: dict, config) -> dict:
+        """Verify each identified scholar's info via lightweight LLM.
+
+        Checks: Is the name + institution + honor/title combination real?
+        Removes scholars that LLM determines are incorrect.
+        """
+        # Collect all unique scholars across all papers
+        all_scholars = {}  # name → scholar dict
+        for title_key, scholars in paper_scholar_map.items():
+            for s in scholars:
+                name = s.get("name", "")
+                if name and name not in all_scholars:
+                    all_scholars[name] = s
+
+        if not all_scholars:
+            return paper_scholar_map
+
+        self.log_manager.info(
+            f"[学者校验] 用轻量级 LLM 校验 {len(all_scholars)} 位知名学者的信息真实性..."
+        )
+
+        llm_model = getattr(config, 'dashboard_model', '') or config.openai_model
+        try:
+            from openai import AsyncOpenAI
+            from citationclaw.core.http_utils import make_async_client
+            client = AsyncOpenAI(
+                api_key=config.openai_api_key,
+                base_url=(config.openai_base_url or "").rstrip("/") + "/",
+                http_client=make_async_client(timeout=60.0),
+            )
+
+            # Batch: max 15 scholars per LLM call
+            scholar_list = list(all_scholars.values())
+            removed_names = set()
+
+            for batch_start in range(0, len(scholar_list), 15):
+                batch = scholar_list[batch_start:batch_start + 15]
+                items = []
+                for s in batch:
+                    honors = ", ".join(s.get("honors", [])) if isinstance(s.get("honors"), list) else s.get("honors", "")
+                    items.append(
+                        f"- {s.get('name', '')} | 机构: {s.get('affiliation', '')} | "
+                        f"头衔: {honors or s.get('position', '')} | "
+                        f"层级: {s.get('tier', '')}"
+                    )
+
+                prompt = (
+                    "以下是通过搜索 LLM 识别出的知名学者列表。请逐一校验每位学者的信息真实性。\n\n"
+                    "【校验规则】：\n"
+                    "1. 姓名与机构是否匹配？（该学者是否确实在该机构任职/曾任职？）\n"
+                    "2. 头衔/荣誉是否真实？（是否确实是 IEEE Fellow / 院士 / 杰青等？）\n"
+                    "3. 如果你不确定某条信息，标为「存疑」\n"
+                    "4. 如果明显错误（如张冠李戴、编造头衔），标为「错误」\n\n"
+                    "每行输出: 正确 / 存疑 / 错误\n\n"
+                    + "\n".join(items)
+                )
+
+                try:
+                    resp = await client.chat.completions.create(
+                        model=llm_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.0,
+                        extra_body={"web_search_options": {}},
+                    )
+                    answers = resp.choices[0].message.content.strip().split('\n')
+
+                    for j, s in enumerate(batch):
+                        if j >= len(answers):
+                            break
+                        verdict = answers[j].strip().lower()
+                        name = s.get("name", "")
+                        if "错误" in verdict or "error" in verdict:
+                            removed_names.add(name)
+                            self.log_manager.info(f"    ✗ 移除: {name} (信息不真实)")
+                        elif "存疑" in verdict or "uncertain" in verdict:
+                            self.log_manager.info(f"    ? 存疑: {name} (保留但标记)")
+                        # "正确" → keep as-is
+                except Exception as e:
+                    self.log_manager.info(f"    ⚠ 校验批次失败: {str(e)[:50]}")
+
+            # Remove invalid scholars from paper_scholar_map
+            if removed_names:
+                for title_key in paper_scholar_map:
+                    paper_scholar_map[title_key] = [
+                        s for s in paper_scholar_map[title_key]
+                        if s.get("name", "") not in removed_names
+                    ]
+                self.log_manager.info(
+                    f"  → 移除 {len(removed_names)} 位信息不真实的学者"
+                )
+            else:
+                self.log_manager.info("  → 全部通过校验")
+
+        except Exception as e:
+            self.log_manager.info(f"  ⚠ 学者校验失败: {str(e)[:50]}")
+
+        return paper_scholar_map
+
+    async def _enrich_unknown_affiliations(self, merged_file: Path, config):
+        """Use lightweight LLM to fill 未知机构 for authors missing affiliation data."""
+        if not config.openai_api_key:
+            return
+
+        lines = []
+        with open(merged_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    lines.append(_json.loads(line))
+
+        # Collect papers with 未知机构
+        papers_to_fix = []  # (line_idx, rec_key, paper_title, author_names)
+        for i, record_wrapper in enumerate(lines):
+            for rec_key, rec in record_wrapper.items():
+                affil = str(rec.get("Authors_Affiliation", "") or "")
+                if "未知机构" not in affil and "未知" not in affil:
+                    continue
+                title = rec.get("Paper_Title", "")
+                # Extract author names with unknown affiliations
+                affil_lines = [l.strip() for l in affil.split('\n') if l.strip()]
+                unknown_authors = []
+                for j in range(0, len(affil_lines) - 1, 2):
+                    name = affil_lines[j]
+                    inst = affil_lines[j + 1] if j + 1 < len(affil_lines) else ""
+                    if "未知" in inst or not inst.strip():
+                        unknown_authors.append(name)
+                if unknown_authors:
+                    papers_to_fix.append((i, rec_key, title, unknown_authors))
+
+        if not papers_to_fix:
+            return
+
+        self.log_manager.info(
+            f"[机构补全] {len(papers_to_fix)} 篇论文含未知机构作者，"
+            f"使用轻量级 LLM 批量查询..."
+        )
+
+        llm_model = getattr(config, 'dashboard_model', '') or config.openai_model
+        try:
+            from openai import AsyncOpenAI
+            from citationclaw.core.http_utils import make_async_client
+            client = AsyncOpenAI(
+                api_key=config.openai_api_key,
+                base_url=(config.openai_base_url or "").rstrip("/") + "/",
+                http_client=make_async_client(timeout=60.0),
+            )
+
+            # Process in batches of 5 papers (to avoid prompt too long)
+            fixed_total = 0
+            for batch_start in range(0, len(papers_to_fix), 5):
+                batch = papers_to_fix[batch_start:batch_start + 5]
+                items = []
+                for _, _, title, authors in batch:
+                    author_list = ", ".join(authors[:8])
+                    items.append(f"论文: 《{title[:60]}》\n作者: {author_list}")
+
+                prompt = (
+                    "以下论文的部分作者机构信息缺失。"
+                    "请根据论文标题和作者姓名，推断每位作者最可能的单位/机构。\n"
+                    "输出格式：每位作者一行，格式为 \"作者名 | 机构全称\"。"
+                    "如无法确定请输出 \"作者名 | 未知\"。\n\n"
+                    + "\n\n".join(items)
+                )
+
+                try:
+                    resp = await client.chat.completions.create(
+                        model=llm_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1,
+                        extra_body={"web_search_options": {}},
+                    )
+                    answer = resp.choices[0].message.content.strip()
+
+                    # Parse LLM response and update records
+                    affil_map = {}  # author_name_lower → institution
+                    for line in answer.split('\n'):
+                        if '|' in line:
+                            parts = line.split('|', 1)
+                            name = parts[0].strip().strip('-').strip()
+                            inst = parts[1].strip()
+                            if name and inst and inst != "未知":
+                                affil_map[name.lower()] = inst
+
+                    # Apply to records
+                    for line_idx, rec_key, _, _ in batch:
+                        rec = lines[line_idx][rec_key]
+                        affil_text = str(rec.get("Authors_Affiliation", ""))
+                        affil_lines = affil_text.split('\n')
+                        changed = False
+                        for j in range(0, len(affil_lines) - 1, 2):
+                            name = affil_lines[j].strip()
+                            inst = affil_lines[j + 1].strip() if j + 1 < len(affil_lines) else ""
+                            if "未知" in inst or not inst:
+                                new_inst = affil_map.get(name.lower())
+                                if new_inst:
+                                    affil_lines[j + 1] = new_inst
+                                    changed = True
+                                    fixed_total += 1
+                        if changed:
+                            rec["Authors_Affiliation"] = '\n'.join(affil_lines)
+                            # Also update First_Author_Institution if it was empty
+                            if not rec.get("First_Author_Institution") and len(affil_lines) >= 2:
+                                first_inst = affil_lines[1].strip()
+                                if first_inst and "未知" not in first_inst:
+                                    rec["First_Author_Institution"] = first_inst
+
+                except Exception as e:
+                    self.log_manager.info(f"  ⚠ LLM机构补全批次失败: {str(e)[:50]}")
+
+            # Write back
+            if fixed_total > 0:
+                with open(merged_file, "w", encoding="utf-8") as f:
+                    for record in lines:
+                        f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+                self.log_manager.info(f"  → 补全了 {fixed_total} 位作者的机构信息")
+            else:
+                self.log_manager.info("  → 未能补全更多机构信息")
+
+        except Exception as e:
+            self.log_manager.info(f"  ⚠ 机构补全失败: {str(e)[:50]}")
+
+    async def _validate_and_fix_records(self, merged_file: Path, config) -> int:
+        """Post-pass: validate and fix country labels and other field issues.
+
+        Reads merged JSONL, fixes in-place, returns number of fixed records.
+        """
+        from citationclaw.core.scholar_search_agent import ScholarSearchAgent
+
+        lines = []
+        with open(merged_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    lines.append(_json.loads(line))
+
+        fixed = 0
+        # Collect records that need LLM-based country inference
+        llm_fix_needed = []  # (line_idx, record_key, field_name, bad_value, affiliation)
+
+        for i, record_wrapper in enumerate(lines):
+            for rec_key, rec in record_wrapper.items():
+                changed = False
+
+                # Fix First_Author_Country
+                country = str(rec.get("First_Author_Country", "") or "").strip()
+                if country:
+                    normalized = ScholarSearchAgent._normalize_country(country)
+                    if normalized != country:
+                        rec["First_Author_Country"] = normalized
+                        changed = True
+
+                    if not ScholarSearchAgent._is_valid_country(rec["First_Author_Country"]):
+                        # Non-country content detected — try to infer from affiliation
+                        affil = str(rec.get("First_Author_Institution", "") or "").strip()
+                        from citationclaw.core.affiliation_validator import AffiliationValidator
+                        inferred = AffiliationValidator._infer_country(affil)
+                        if inferred:
+                            rec["First_Author_Country"] = ScholarSearchAgent._normalize_country(inferred)
+                            changed = True
+                        else:
+                            # Can't infer from rules — queue for LLM
+                            llm_fix_needed.append((i, rec_key, "First_Author_Country",
+                                                    rec["First_Author_Country"], affil))
+                            rec["First_Author_Country"] = ""  # Clear invalid value for now
+                            changed = True
+
+                # Also validate country in Authors_Affiliation text isn't corrupted
+                if not rec.get("First_Author_Country") and rec.get("First_Author_Institution"):
+                    from citationclaw.core.affiliation_validator import AffiliationValidator
+                    inferred = AffiliationValidator._infer_country(rec["First_Author_Institution"])
+                    if inferred:
+                        rec["First_Author_Country"] = ScholarSearchAgent._normalize_country(inferred)
+                        changed = True
+
+                # Fix scholar metadata — validate country in Formated Renowned Scholar
+                scholars = rec.get("Formated Renowned Scholar", [])
+                if isinstance(scholars, list):
+                    for s in scholars:
+                        if not isinstance(s, dict):
+                            continue
+                        # Check 国家 field for non-country content
+                        s_country_key = '国家' if '国家' in s else 'country'
+                        s_country = str(s.get(s_country_key, '') or '').strip()
+                        if s_country:
+                            norm = ScholarSearchAgent._normalize_country(s_country)
+                            if norm != s_country:
+                                s[s_country_key] = norm
+                                changed = True
+                            if not ScholarSearchAgent._is_valid_country(s.get(s_country_key, '')):
+                                # Non-country content in scholar record — infer from institution
+                                s_inst = str(s.get('机构', s.get('institution', '')) or '')
+                                from citationclaw.core.affiliation_validator import AffiliationValidator
+                                inferred = AffiliationValidator._infer_country(s_inst)
+                                if inferred:
+                                    s[s_country_key] = ScholarSearchAgent._normalize_country(inferred)
+                                    changed = True
+                                else:
+                                    # Queue for LLM
+                                    llm_fix_needed.append((
+                                        i, rec_key,
+                                        f"scholar:{s.get('姓名', s.get('name', ''))}:country",
+                                        s.get(s_country_key, ''), s_inst
+                                    ))
+                                    s[s_country_key] = ''
+                                    changed = True
+
+                if changed:
+                    fixed += 1
+
+        # LLM-based fix for unresolvable cases (batch)
+        if llm_fix_needed and config.openai_api_key:
+            llm_model = getattr(config, 'dashboard_model', '') or config.openai_model
+            try:
+                from openai import AsyncOpenAI
+                from citationclaw.core.http_utils import make_async_client
+                client = AsyncOpenAI(
+                    api_key=config.openai_api_key,
+                    base_url=(config.openai_base_url or "").rstrip("/") + "/",
+                    http_client=make_async_client(timeout=30.0),
+                )
+                # Batch all into one LLM call
+                items = []
+                for _, _, _, bad_val, affil in llm_fix_needed[:20]:
+                    items.append(f"- 原始值: \"{bad_val}\", 机构: \"{affil}\"")
+                prompt = (
+                    "以下记录的'国家'字段内容异常（可能是职务、头衔等非国家内容）。"
+                    "请根据机构信息推断每条记录应属于哪个国家，输出中文国家名。"
+                    "如无法判断输出\"未知\"。每行一个国家，顺序对应。\n\n"
+                    + "\n".join(items)
+                )
+                resp = await client.chat.completions.create(
+                    model=llm_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                )
+                answers = resp.choices[0].message.content.strip().split('\n')
+                for j, (line_idx, rec_key, field, _, _) in enumerate(llm_fix_needed[:20]):
+                    if j < len(answers):
+                        country_fix = answers[j].strip().strip('-').strip()
+                        if country_fix and country_fix != "未知":
+                            if field.startswith("scholar:"):
+                                # Fix scholar's country: field = "scholar:Name:country"
+                                parts = field.split(":")
+                                s_name = parts[1] if len(parts) > 1 else ""
+                                scholars = lines[line_idx][rec_key].get("Formated Renowned Scholar", [])
+                                for s in scholars:
+                                    if isinstance(s, dict):
+                                        sn = s.get('姓名', s.get('name', ''))
+                                        if sn == s_name:
+                                            s_key = '国家' if '国家' in s else 'country'
+                                            s[s_key] = country_fix
+                                            break
+                                self.log_manager.info(f"  [LLM修正] 学者 {s_name} 国家: → {country_fix}")
+                            else:
+                                lines[line_idx][rec_key][field] = country_fix
+                                self.log_manager.info(f"  [LLM修正] {field}: → {country_fix}")
+            except Exception as e:
+                self.log_manager.info(f"  ⚠ LLM国家修正失败: {str(e)[:50]}")
+
+        # Write back
+        if fixed > 0:
+            with open(merged_file, "w", encoding="utf-8") as f:
+                for record in lines:
+                    f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+
+        return fixed
 
     async def execute_full_pipeline(
         self,
@@ -642,7 +1252,9 @@ class TaskExecutor:
         try:
             # 生成带时间戳的文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            result_dir = DATA_DIR / f"result-{timestamp}"
+            _folder_prefix = getattr(config, "result_folder_prefix", "") or ""
+            folder_name = f"{_folder_prefix}-result-{timestamp}" if _folder_prefix else f"result-{timestamp}"
+            result_dir = DATA_DIR / folder_name
             result_dir.mkdir(parents=True, exist_ok=True)
             file_prefix = f"{output_prefix}-{timestamp}"
 
@@ -716,26 +1328,58 @@ class TaskExecutor:
 
             self.log_manager.success("Phase 3 · 导出 完成")
 
-            # ==================== 阶段4: 引用描述（可选）====================
+            # ==================== 阶段4: 引文语境提取（可选）====================
             citing_desc_excel = excel_file
             if config.enable_citing_description:
                 self.log_manager.info("=" * 50)
-                self.log_manager.info("Phase 4 · 引文语境提取: 搜索引用描述")
+                self.log_manager.info("Phase 4 · 引文语境提取: PDF 解析 + 轻量 LLM")
                 self.log_manager.info("=" * 50)
 
-                citing_desc_excel = result_dir / f"{file_prefix}_results_with_citing_desc.xlsx"
+                import pandas as pd
+                phase4_output_jsonl = result_dir / f"{file_prefix}_citing_desc.jsonl"
                 await self._run_skill(
-                    "phase4_citation_desc",
+                    "phase4_citation_extract",
                     config,
-                    input_excel=excel_file,
-                    output_excel=citing_desc_excel,
-                    parallel_workers=config.parallel_author_search,
-                    quota_event=self.quota_exceeded_event,
-                    desc_cache=desc_cache,
+                    input_file=author_info_file,
+                    output_file=phase4_output_jsonl,
+                    target_title=output_prefix,
+                    target_authors=[],
+                    citation_desc_cache=desc_cache,
                 )
-                if self.quota_exceeded_event.is_set():
-                    self._handle_quota_exceeded()
-                    return
+
+                # Merge descriptions back into Excel
+                if phase4_output_jsonl.exists():
+                    import json
+                    desc_map = {}
+                    with open(phase4_output_jsonl, encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                rec = json.loads(line)
+                                if isinstance(rec, dict):
+                                    inner = rec
+                                    for v in rec.values():
+                                        if isinstance(v, dict) and "Paper_Title" in v:
+                                            inner = v
+                                            break
+                                    title = inner.get("Paper_Title", inner.get("paper_title", ""))
+                                    desc = inner.get("Citing_Description", "")
+                                    if title and desc:
+                                        desc_map[title.strip()] = desc
+                            except Exception:
+                                continue
+
+                    if desc_map:
+                        df = pd.read_excel(excel_file)
+                        df["Citing_Description"] = df["Paper_Title"].str.strip().map(desc_map).fillna("")
+                        citing_desc_excel = result_dir / f"{file_prefix}_results_with_citing_desc.xlsx"
+                        df.to_excel(citing_desc_excel, index=False)
+                        n_with = (df["Citing_Description"].str.strip() != "").sum()
+                        self.log_manager.success(
+                            f"Phase 4 完成: {n_with}/{len(df)} 篇有引文语境描述"
+                        )
 
             # ==================== 阶段5: HTML报告（可选）====================
             html_file = None
@@ -1035,7 +1679,9 @@ class TaskExecutor:
 
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            result_dir = DATA_DIR / f"result-{timestamp}"
+            _folder_prefix = getattr(config, "result_folder_prefix", "") or ""
+            folder_name = f"{_folder_prefix}-result-{timestamp}" if _folder_prefix else f"result-{timestamp}"
+            result_dir = DATA_DIR / folder_name
             result_dir.mkdir(parents=True, exist_ok=True)
             self.log_manager.info(f"结果目录: {result_dir}")
 
@@ -1215,7 +1861,7 @@ class TaskExecutor:
             if pipeline_result is None:
                 self.log_manager.warning("管线未产出有效结果，任务结束")
                 return
-            merged_file, excel_file, json_file = pipeline_result
+            merged_file, excel_file, json_file, phase2_pdf_paths = pipeline_result
 
             # —— Phase 4：引文语境提取（可选，PDF 下载 + 本地解析）——
             citing_desc_excel = excel_file
@@ -1223,10 +1869,9 @@ class TaskExecutor:
                 import pandas as pd
 
                 self.log_manager.info("=" * 50)
-                self.log_manager.info("Phase 4 · 引文语境提取: PDF 下载 + 本地解析 + 轻量 LLM")
+                self.log_manager.info("Phase 4 · 引文语境提取: PDF 解析 + 轻量 LLM (复用 Phase 2 PDF)")
                 self.log_manager.info("=" * 50)
 
-                # Use new PDF-based citation extraction skill
                 phase4_output_jsonl = result_dir / f"{output_prefix}_citing_desc.jsonl"
                 target_title = canonical_titles[0] if canonical_titles else ""
 
@@ -1237,6 +1882,7 @@ class TaskExecutor:
                     output_file=phase4_output_jsonl,
                     target_title=target_title,
                     target_authors=[],
+                    pdf_paths=phase2_pdf_paths,
                     citation_desc_cache=desc_cache,
                 )
 
@@ -1422,10 +2068,10 @@ class TaskExecutor:
                     "Citing_Paper": paper_title,
                     "Is_Self_Citation": False,
                     "Citing_Description": citing_desc,
-                    "Searched Author-Affiliation": author_entry.get("Searched Author-Affiliation", ""),
+                    "Authors_Affiliation": author_entry.get("Authors_Affiliation", ""),
                     "First_Author_Institution": author_entry.get("First_Author_Institution", ""),
                     "First_Author_Country": author_entry.get("First_Author_Country", ""),
-                    "Searched Author Information": author_entry.get("Searched Author Information", ""),
+                    "Authors_Detail": author_entry.get("Authors_Detail", ""),
                     "Renowned Scholar": author_entry.get("Renowned Scholar", ""),
                     "Formated Renowned Scholar": author_entry.get("Formated Renowned Scholar", []),
                 }
@@ -1435,7 +2081,9 @@ class TaskExecutor:
 
             # 创建输出目录
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            result_dir = DATA_DIR / f"result-{timestamp}"
+            _folder_prefix = getattr(config, "result_folder_prefix", "") or ""
+            folder_name = f"{_folder_prefix}-result-{timestamp}" if _folder_prefix else f"result-{timestamp}"
+            result_dir = DATA_DIR / folder_name
             result_dir.mkdir(parents=True, exist_ok=True)
             self.log_manager.info(f"结果目录: {result_dir}")
 
@@ -1515,8 +2163,8 @@ class TaskExecutor:
         import pandas as pd
         df = pd.read_excel(excel_file)
         mask = df.apply(lambda row: any(
-            scholar.lower() in str(row.get('Searched Author-Affiliation', '') or '').lower() or
-            scholar.lower() in str(row.get('Authors_with_Profile', '') or '').lower() or
+            scholar.lower() in str(row.get('Authors_Affiliation', '') or '').lower() or
+            scholar.lower() in str(row.get('GS_Authors', '') or '').lower() or
             scholar.lower() in str(row.get('Paper_Title', '') or '').lower()
             for scholar in scholar_names
         ), axis=1)

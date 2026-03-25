@@ -76,8 +76,8 @@ def test_to_legacy_record():
     assert inner["Is_Self_Citation"] == False
     assert "MIT" in inner["First_Author_Institution"]
     assert inner["First_Author_Country"] in ("US", "美国")
-    assert "Alice Smith" in inner["Searched Author-Affiliation"]
-    assert "Bob Jones" in inner["Searched Author-Affiliation"]
+    assert "Alice Smith" in inner["Authors_Affiliation"]
+    assert "Bob Jones" in inner["Authors_Affiliation"]
     assert inner["Data_Sources"] == "openalex,s2"
     assert "IEEE Fellow" in str(inner["Renowned Scholar"])
     assert isinstance(inner["Formated Renowned Scholar"], list)
@@ -94,4 +94,4 @@ def test_to_legacy_no_metadata():
     inner = record["1"]
     assert inner["Paper_Title"] == "Unknown Paper"
     assert inner["Data_Sources"] == ""
-    assert inner["Searched Author-Affiliation"] == ""
+    assert inner["Authors_Affiliation"] == ""

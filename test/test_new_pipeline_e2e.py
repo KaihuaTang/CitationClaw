@@ -71,7 +71,7 @@ def test_adapter_full_flow():
 
     inner = record["1"]
     assert "Paper_Title" in inner
-    assert "Searched Author-Affiliation" in inner
+    assert "Authors_Affiliation" in inner
     assert "First_Author_Institution" in inner
     assert "Renowned Scholar" in inner
     assert "Formated Renowned Scholar" in inner

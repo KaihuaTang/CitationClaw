@@ -99,6 +99,7 @@ class ConfigUpdate(BaseModel):
     openai_api_key: str
     openai_base_url: str
     openai_model: str
+    result_folder_prefix: str = ""
     default_output_prefix: str = "paper"
     sleep_between_pages: int = 10
     sleep_between_authors: float = 0.5
@@ -131,6 +132,8 @@ class ConfigUpdate(BaseModel):
     specified_scholars: str = ""
     dashboard_skip_citing_analysis: bool = False
     dashboard_model: str = "gemini-3-flash-preview-nothinking"
+    s2_api_key: str = ""
+    mineru_api_token: str = ""
     api_access_token: str = ""
     api_user_id: str = ""
 
@@ -160,7 +163,12 @@ async def get_providers():
 @app.post("/api/config")
 async def save_config(config: ConfigUpdate):
     try:
-        new_config = AppConfig(**config.model_dump())
+        data = config.model_dump()
+        # Debug: log MinerU token save status
+        token = data.get("mineru_api_token", "")
+        if token:
+            print(f"[CONFIG] MinerU token 已保存: {token[:8]}...({len(token)} chars)")
+        new_config = AppConfig(**data)
         config_manager.save(new_config)
         return {"status": "success", "message": "配置已保存"}
     except Exception as e:

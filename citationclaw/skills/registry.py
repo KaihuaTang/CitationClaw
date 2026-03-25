@@ -6,7 +6,6 @@ from citationclaw.skills.phase2_author_intel import AuthorIntelSkill
 from citationclaw.skills.phase2_metadata import MetadataCollectionSkill
 from citationclaw.skills.phase3_export import ExportSkill
 from citationclaw.skills.phase3_scholar_assess import ScholarAssessSkill
-from citationclaw.skills.phase4_citation_desc import CitationDescriptionSkill
 from citationclaw.skills.phase4_citation_extract import CitationExtractSkill
 from citationclaw.skills.phase5_report import ReportGenerateSkill
 
@@ -40,8 +39,7 @@ def build_default_registry() -> SkillRegistry:
     # Phase 3: 学者影响力评估 + 导出
     reg.register(ExportSkill())
     reg.register(ScholarAssessSkill())
-    # Phase 4: 引文语境提取 (old: LLM search, new: PDF parse)
-    reg.register(CitationDescriptionSkill())
+    # Phase 4: 引文语境提取 (PDF parse + lightweight LLM)
     reg.register(CitationExtractSkill())
     # Phase 5: 报告生成与导出
     reg.register(ReportGenerateSkill())
