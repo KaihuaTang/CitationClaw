@@ -846,12 +846,23 @@ class PDFDownloader:
         return None
 
     # ── Batch download ────────────────────────────────────────────────
+    _PER_PAPER_TIMEOUT = 480  # 8 minutes max per paper
+
     async def batch_download(self, papers: List[dict], concurrency: int = 10,
                              log=None) -> List[Optional[Path]]:
         sem = asyncio.Semaphore(concurrency)
         async def _dl(p):
+            title = p.get("Paper_Title", p.get("title", "?"))[:40]
             async with sem:
-                return await self.download(p, log=log)
+                try:
+                    return await asyncio.wait_for(
+                        self.download(p, log=log),
+                        timeout=self._PER_PAPER_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    if log:
+                        log(f"    [PDF超时] {self._PER_PAPER_TIMEOUT}s 放弃: {title}")
+                    return None
         return await asyncio.gather(*[_dl(p) for p in papers])
 
     async def close(self):
