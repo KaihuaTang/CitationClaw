@@ -1108,13 +1108,41 @@ class PDFDownloader:
             return None
 
     # ── Main download method (PaperRadar-style smart download) ────────
+    _RETRY_ATTEMPTS = 2      # total attempts = 1 + retries
+    _RETRY_DELAY = 8         # seconds between retries
+
     async def download(self, paper: dict, log=None) -> Optional[Path]:
-        """Smart multi-source PDF download. Returns cached path or None."""
+        """Smart multi-source PDF download with automatic retry.
+
+        On first failure, waits and retries the full cascade once.
+        Transient errors (rate limits, timeouts, mirror flakiness) often
+        resolve on the second attempt.
+        """
         title = paper.get("Paper_Title", paper.get("title", "?"))[:40]
         cached = self._cache_path(paper)
         if cached.exists() and cached.stat().st_size > 0:
             if log:
                 log(f"    [PDF缓存] {title}")
+            return cached
+
+        for attempt in range(1 + self._RETRY_ATTEMPTS):
+            result = await self._download_once(paper, log=log)
+            if result:
+                return result
+            if attempt < self._RETRY_ATTEMPTS:
+                if log:
+                    log(f"    [PDF重试] {self._RETRY_DELAY}s 后重试 ({attempt+1}/{self._RETRY_ATTEMPTS}): {title}")
+                await asyncio.sleep(self._RETRY_DELAY)
+
+        if log:
+            log(f"    [PDF] 所有来源均失败 (含{self._RETRY_ATTEMPTS}次重试): {title}")
+        return None
+
+    async def _download_once(self, paper: dict, log=None) -> Optional[Path]:
+        """Single attempt: try all sources in cascade order."""
+        title = paper.get("Paper_Title", paper.get("title", "?"))[:40]
+        cached = self._cache_path(paper)
+        if cached.exists() and cached.stat().st_size > 0:
             return cached
 
         doi = (paper.get("doi") or "").replace("https://doi.org/", "").replace("http://doi.org/", "").strip()
@@ -1327,9 +1355,7 @@ class PDFDownloader:
                     log(f"    [PDF OK] ScraperAPI智能下载 ({len(data)//1024}KB): {title}")
                 return cached
 
-        if log:
-            log(f"    [PDF] 所有来源均失败: {title}")
-        return None
+        return None  # All sources exhausted for this attempt
 
     # ── Helper: fetch S2 data by ID or title ──────────────────────────
     _s2_dl_lock = asyncio.Lock()  # Serialize S2 API calls in downloader
