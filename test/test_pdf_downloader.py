@@ -221,6 +221,40 @@ class TestPdfTitleMatches:
         )
         assert _pdf_title_matches(pdf, "Attention Is All You Need") is False
 
+    def test_overlapping_field_rejected(self):
+        """Papers in same field (underwater detection) sharing keywords should be rejected."""
+        pdf = self._make_fake_pdf(
+            "SPMamba-YOLO: An Underwater Object Detection Network Based on "
+            "Multi-Scale Feature Enhancement and Global Context Modeling "
+            "with Advanced Information Processing Pipeline"
+        )
+        # Shares 6 words but missing key identifiers like USOD, multimodal, salient, fusion
+        assert _pdf_title_matches(pdf,
+            "IF-USOD: Multimodal information fusion interactive feature "
+            "enhancement architecture for underwater salient object detection"
+        ) is False
+
+    def test_acronym_must_match(self):
+        """Distinctive acronyms like BERT, USOD must appear on first page."""
+        pdf = self._make_fake_pdf(
+            "A study on pre-training deep bidirectional transformers "
+            "for language understanding with modern architectures and methods"
+        )
+        # Has overlapping words but missing "BERT" acronym
+        assert _pdf_title_matches(pdf,
+            "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+        ) is False
+
+    def test_acronym_present_passes(self):
+        """When acronym is present, paper should pass."""
+        pdf = self._make_fake_pdf(
+            "BERT: Pre-training of Deep Bidirectional Transformers "
+            "for Language Understanding by Devlin et al from Google Research"
+        )
+        assert _pdf_title_matches(pdf,
+            "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+        ) is True
+
     def test_partial_match_accepted(self):
         pdf = self._make_fake_pdf("Attention Mechanisms Are All You Need for NLP Tasks")
         assert _pdf_title_matches(pdf, "Attention Is All You Need") is True

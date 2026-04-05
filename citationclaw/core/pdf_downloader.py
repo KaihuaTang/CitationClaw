@@ -378,6 +378,11 @@ def _pdf_title_matches(pdf_data: bytes, expected_title: str, threshold: float = 
     Uses word-overlap ratio to handle minor differences.
     Returns True if enough title words appear on the first page.
     Returns True (accept) if PyMuPDF is unavailable or extraction fails.
+
+    Enhanced checks:
+    - Acronyms/unique identifiers in the title (e.g. "USOD", "BERT") must appear
+    - Longer titles (>8 words) use a stricter threshold (0.5) to avoid
+      false positives from papers in overlapping fields
     """
     if not expected_title or len(expected_title) < 10:
         return True  # Too short to verify meaningfully
@@ -399,9 +404,29 @@ def _pdf_title_matches(pdf_data: bytes, expected_title: str, threshold: float = 
         title_words = set(re.sub(r'[^\w\s]', ' ', expected_title.lower()).split()) - _stop
         if not title_words or len(title_words) < 2:
             return True
+
         matched = sum(1 for w in title_words if w in first_page_text)
         ratio = matched / len(title_words)
-        return ratio >= threshold
+
+        # Stricter threshold for long titles (papers in overlapping fields
+        # share many common words like "detection", "feature", "object")
+        effective_threshold = 0.5 if len(title_words) > 8 else threshold
+
+        if ratio < effective_threshold:
+            return False
+
+        # Acronym/identifier check: if the title contains distinctive
+        # uppercase terms (e.g. "USOD", "BERT", "ResNet"), require at least
+        # one to appear. These are strong unique identifiers.
+        acronyms = re.findall(r'\b[A-Z][A-Z0-9]{2,}\b', expected_title)
+        # Also catch CamelCase identifiers like "ResNet", "AlphaGo"
+        acronyms += re.findall(r'\b[A-Z][a-z]+[A-Z][a-zA-Z]*\b', expected_title)
+        if acronyms:
+            # At least one distinctive identifier must appear
+            if not any(a.lower() in first_page_text for a in acronyms):
+                return False
+
+        return True
     except ImportError:
         return True  # PyMuPDF not installed — skip verification
     except Exception:
