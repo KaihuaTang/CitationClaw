@@ -415,6 +415,18 @@ async function resultsShowFolders() {
     }
 }
 
+function _classifyHtmlReport(name) {
+    // 识别 per-paper 报告：文件名包含 _paper{N}_dashboard
+    const m = name.match(/_paper(\d+)_dashboard\.html$/i);
+    if (m) {
+        return { kind: 'per_paper', index: parseInt(m[1], 10) };
+    }
+    if (/_dashboard\.html$/i.test(name)) {
+        return { kind: 'aggregated', index: 0 };
+    }
+    return { kind: 'other_html', index: 999 };
+}
+
 async function resultsOpenFolder(folderName, displayName) {
     window._resultCurrentFolderDisplay = displayName;
     _resultsSetLoading(true);
@@ -423,9 +435,29 @@ async function resultsOpenFolder(folderName, displayName) {
         const res = await fetch(`/api/results/list?folder=${encodeURIComponent(folderName)}`);
         const files = await res.json();
         _resultsSetLoading(false);
+
+        // 分拣：HTML 报告置顶（综合报告在前，单篇按 index 排序），其他文件按原顺序
+        const htmlFiles = [];
+        const otherFiles = [];
+        files.forEach(f => {
+            if (f.type === '.html') htmlFiles.push(f);
+            else otherFiles.push(f);
+        });
+        htmlFiles.sort((a, b) => {
+            const ca = _classifyHtmlReport(a.name);
+            const cb = _classifyHtmlReport(b.name);
+            // aggregated(kind=aggregated, index 0) 在前；per_paper 按 index 升序；other_html 最后
+            const order = { aggregated: 0, per_paper: 1, other_html: 2 };
+            if (order[ca.kind] !== order[cb.kind]) return order[ca.kind] - order[cb.kind];
+            return ca.index - cb.index;
+        });
+        const sorted = htmlFiles.concat(otherFiles);
+
+        const hasMultiPaper = htmlFiles.some(f => _classifyHtmlReport(f.name).kind === 'per_paper');
+
         const table = document.getElementById('results-table');
         table.innerHTML = '';
-        files.forEach(file => {
+        sorted.forEach(file => {
             const typeClass = file.type === '.xlsx' ? 'success' :
                               file.type === '.json' ? 'info' :
                               file.type === '.html' ? 'primary' : 'warning';
@@ -433,6 +465,21 @@ async function resultsOpenFolder(folderName, displayName) {
             const date = new Date(file.modified * 1000).toLocaleString('zh-CN');
             const icon = file.type === '.xlsx' ? 'excel' :
                          file.type === '.html' ? 'richtext' : 'code';
+
+            // HTML 报告：根据文件名分类，显示更清晰的标签
+            let fileLabel = file.name;
+            let reportBadge = '';
+            if (file.type === '.html') {
+                const cls = _classifyHtmlReport(file.name);
+                if (cls.kind === 'aggregated' && hasMultiPaper) {
+                    reportBadge = `<span class="badge bg-primary ms-2">综合报告</span>`;
+                } else if (cls.kind === 'aggregated') {
+                    reportBadge = `<span class="badge bg-primary ms-2">分析报告</span>`;
+                } else if (cls.kind === 'per_paper') {
+                    reportBadge = `<span class="badge bg-info ms-2">论文 ${cls.index} 独立报告</span>`;
+                }
+            }
+
             const actionBtn = file.type === '.html'
                 ? `<a href="/api/results/view/${file.path}" target="_blank" class="btn btn-sm btn-primary">
                        <i class="bi bi-eye"></i> 查看报告
@@ -442,7 +489,7 @@ async function resultsOpenFolder(folderName, displayName) {
                    </a>`;
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><i class="bi bi-file-earmark-${icon}"></i> ${file.name}</td>
+                <td><i class="bi bi-file-earmark-${icon}"></i> ${fileLabel}${reportBadge}</td>
                 <td><span class="badge bg-${typeClass}">${file.type}</span></td>
                 <td>${size} KB</td>
                 <td>${date}</td>
@@ -450,7 +497,7 @@ async function resultsOpenFolder(folderName, displayName) {
             `;
             table.appendChild(row);
         });
-        document.getElementById('file-count').textContent = files.length;
+        document.getElementById('file-count').textContent = sorted.length;
         _resultsShowView('files');
     } catch (err) {
         console.error('加载文件夹内容失败:', err);
@@ -1005,16 +1052,44 @@ function initIndexPage() {
         if (data && data.dashboard) {
             const path = normPath(data.dashboard);
             const name = path.split('/').pop();
+            const perPaper = (data && Array.isArray(data.per_paper_dashboards)) ? data.per_paper_dashboards : [];
+            const isMulti = perPaper.length > 0;
             html += `<div class="dashboard-cta">
                 <span class="result-file-icon">🔭</span>
                 <div class="dashboard-cta-text">
-                    <strong style="color:#bc8cff">多维画像分析报告已生成</strong><br>
+                    <strong style="color:#bc8cff">${isMulti ? '多论文综合画像分析报告' : '多维画像分析报告'}已生成</strong><br>
                     <span style="font-size:11.5px">${name}</span>
                 </div>
                 <a href="/api/results/view/${path}" target="_blank" class="btn-download btn-dl-report">
-                    <i class="bi bi-eye"></i> 查看报告
+                    <i class="bi bi-eye"></i> ${isMulti ? '查看综合报告' : '查看报告'}
                 </a>
             </div>`;
+
+            // 每篇论文独立报告
+            if (isMulti) {
+                const items = perPaper.map(item => {
+                    const p = normPath(item.path || '');
+                    const n = p.split('/').pop();
+                    const title = (item.title || '').replace(/"/g, '&quot;');
+                    const titleShort = title.length > 60 ? title.slice(0, 60) + '…' : title;
+                    return `<div class="result-file-row" title="${title}">
+                        <span class="result-file-icon">📄</span>
+                        <div class="result-file-name" style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                            <span style="font-weight:600">论文 ${item.index} 独立报告</span>
+                            <span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${titleShort}</span>
+                        </div>
+                        <a href="/api/results/view/${p}" target="_blank" class="btn-download btn-dl-report">
+                            <i class="bi bi-eye"></i> 查看
+                        </a>
+                    </div>`;
+                }).join('');
+                html += `<div class="per-paper-reports" style="margin-top:8px;border-left:2px solid rgba(188,140,255,0.3);padding-left:10px">
+                    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;padding-left:2px">
+                        <i class="bi bi-files"></i> 单篇论文独立报告（共 ${perPaper.length} 份）
+                    </div>
+                    ${items}
+                </div>`;
+            }
         }
 
         // 费用摘要卡片

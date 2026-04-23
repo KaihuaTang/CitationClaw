@@ -823,6 +823,7 @@ class TaskExecutor:
 
             # —— Phase 5：生成 HTML 画像报告（可选）——
             html_file = None
+            per_paper_html_files: List[dict] = []
             if config.enable_dashboard:
                 self.log_manager.info("▶ Phase 5: 生成 HTML 画像报告")
                 html_file = result_dir / f"{output_prefix}_dashboard.html"
@@ -848,6 +849,23 @@ class TaskExecutor:
                     },
                     skip_citing_analysis=config.dashboard_skip_citing_analysis,
                 )
+
+                # —— 多论文模式：额外为每篇论文生成独立报告 ——
+                if len(canonical_titles) > 1:
+                    self.log_manager.info("=" * 50)
+                    self.log_manager.info(
+                        f"▶ Phase 5 (每篇独立报告): 为 {len(canonical_titles)} 篇论文分别生成单篇报告"
+                    )
+                    self.log_manager.info("=" * 50)
+                    per_paper_html_files = await self._generate_per_paper_dashboards(
+                        citing_desc_excel=citing_desc_excel,
+                        all_renowned=all_renowned,
+                        top_renowned=top_renowned,
+                        canonical_titles=canonical_titles,
+                        result_dir=result_dir,
+                        output_prefix=output_prefix,
+                        config=config,
+                    )
 
             # 运行后快照 LLM 额度
             if config.api_access_token and config.api_user_id:
@@ -878,11 +896,17 @@ class TaskExecutor:
                 self.log_manager.info("  LLM API: 未配置系统令牌，无法追踪额度消耗")
             self.log_manager.info("=" * 50)
 
+            if per_paper_html_files:
+                self.log_manager.success(f"📊 每篇论文独立报告: {len(per_paper_html_files)} 份")
+                for item in per_paper_html_files:
+                    self.log_manager.success(f"   - [论文 {item['index']}] {item['path']}")
+
             self.log_manager.success("=" * 50)
             await self.log_manager._broadcast({"type": "all_done", "data": {
                 "excel": str(excel_file),
                 "json": str(json_file),
                 "dashboard": str(html_file) if html_file else None,
+                "per_paper_dashboards": per_paper_html_files,
                 "cost_summary": cost_summary,
             }})
 
@@ -1056,6 +1080,137 @@ class TaskExecutor:
         self.log_manager.broadcast_event("quota_exceeded", {
             "message": "API 配额不足，搜索已自动停止。已处理的数据已保存至本地缓存，充值后重新运行将自动续跑，无需重复花费 Token。"
         })
+
+    async def _generate_per_paper_dashboards(
+        self,
+        citing_desc_excel: Path,
+        all_renowned: Path,
+        top_renowned: Path,
+        canonical_titles: List[str],
+        result_dir: Path,
+        output_prefix: str,
+        config: AppConfig,
+    ) -> List[dict]:
+        """
+        多论文模式下为每篇论文生成独立的 HTML 报告。
+
+        按 Citing_Paper / CitingPaper 列过滤三份 Excel 文件，
+        把每篇论文的数据单独交给 phase5 生成 dashboard。
+
+        返回 [{"index": i, "title": canonical, "path": str}] 列表。
+        """
+        import pandas as pd
+
+        def _fwd(p: Path) -> str:
+            return str(p).replace("\\", "/")
+
+        per_paper_files: List[dict] = []
+
+        if not citing_desc_excel.exists():
+            self.log_manager.warning("⚠️ 主引用描述文件不存在，跳过单篇独立报告生成")
+            return per_paper_files
+
+        try:
+            df_main = pd.read_excel(citing_desc_excel)
+        except Exception as e:
+            self.log_manager.warning(f"⚠️ 读取引用描述 Excel 失败，跳过单篇独立报告: {e}")
+            return per_paper_files
+
+        if 'Citing_Paper' not in df_main.columns:
+            self.log_manager.warning("⚠️ 主 Excel 缺少 Citing_Paper 列，无法按论文切分")
+            return per_paper_files
+
+        df_all_renowned = None
+        df_top_renowned = None
+        if all_renowned.exists():
+            try:
+                df_all_renowned = pd.read_excel(all_renowned)
+            except Exception as e:
+                self.log_manager.warning(f"⚠️ 读取 all_renowned 失败: {e}")
+        if top_renowned.exists():
+            try:
+                df_top_renowned = pd.read_excel(top_renowned)
+            except Exception as e:
+                self.log_manager.warning(f"⚠️ 读取 top_renowned 失败: {e}")
+
+        # 独立报告放到子目录，避免文件列表太杂乱
+        per_paper_dir = result_dir / "per_paper_reports"
+        per_paper_dir.mkdir(parents=True, exist_ok=True)
+
+        total = len(canonical_titles)
+        for idx, canonical in enumerate(canonical_titles, start=1):
+            if self.should_cancel:
+                self.log_manager.warning("任务已取消，中止单篇报告生成")
+                break
+
+            preview = canonical if len(canonical) <= 60 else canonical[:60] + "..."
+            self.log_manager.info(f"  → [{idx}/{total}] 生成单篇报告: {preview}")
+
+            target = canonical.strip()
+            df_paper = df_main[
+                df_main['Citing_Paper'].astype(str).str.strip() == target
+            ].reset_index(drop=True)
+
+            if df_paper.empty:
+                self.log_manager.warning(f"    ⚠️ 论文 {idx} 无匹配记录，跳过")
+                continue
+
+            paper_citing_excel = per_paper_dir / f"{output_prefix}_paper{idx}_results_with_citing_desc.xlsx"
+            try:
+                df_paper.to_excel(paper_citing_excel, index=False)
+            except Exception as e:
+                self.log_manager.warning(f"    ⚠️ 写入单篇 Excel 失败，跳过论文 {idx}: {e}")
+                continue
+
+            # 过滤知名学者文件（列名 CitingPaper；若缺失则回退到全量）
+            paper_all_renowned = per_paper_dir / f"{output_prefix}_paper{idx}_all_renowned_scholar.xlsx"
+            paper_top_renowned = per_paper_dir / f"{output_prefix}_paper{idx}_top-tier_scholar.xlsx"
+
+            if df_all_renowned is not None and 'CitingPaper' in df_all_renowned.columns:
+                df_filt = df_all_renowned[
+                    df_all_renowned['CitingPaper'].astype(str).str.strip() == target
+                ].reset_index(drop=True)
+                df_filt.to_excel(paper_all_renowned, index=False)
+            else:
+                paper_all_renowned = all_renowned
+
+            if df_top_renowned is not None and 'CitingPaper' in df_top_renowned.columns:
+                df_filt = df_top_renowned[
+                    df_top_renowned['CitingPaper'].astype(str).str.strip() == target
+                ].reset_index(drop=True)
+                df_filt.to_excel(paper_top_renowned, index=False)
+            else:
+                paper_top_renowned = top_renowned
+
+            paper_html = result_dir / f"{output_prefix}_paper{idx}_dashboard.html"
+            try:
+                await self._run_skill(
+                    "phase5_report_generate",
+                    config,
+                    citing_desc_excel=paper_citing_excel,
+                    renowned_all_xlsx=paper_all_renowned,
+                    renowned_top_xlsx=paper_top_renowned,
+                    output_html=paper_html,
+                    canonical_titles=[canonical],
+                    download_filenames={
+                        "excel": _fwd(paper_citing_excel),
+                        "all_renowned": _fwd(paper_all_renowned),
+                        "top_renowned": _fwd(paper_top_renowned),
+                    },
+                    skip_citing_analysis=config.dashboard_skip_citing_analysis,
+                )
+                per_paper_files.append({
+                    "index": idx,
+                    "title": canonical,
+                    "path": str(paper_html),
+                })
+                self.log_manager.success(f"    ✅ 已生成: {paper_html.name}")
+            except Exception as e:
+                self.log_manager.warning(f"    ⚠️ 论文 {idx} 报告生成失败: {e}")
+                import traceback
+                self.log_manager.warning(traceback.format_exc())
+
+        return per_paper_files
 
     def _filter_by_scholars(self, excel_file: Path, scholar_names: list, result_dir: Path, output_prefix: str) -> Path:
         """从 Excel 中过滤出含指定学者的行"""
