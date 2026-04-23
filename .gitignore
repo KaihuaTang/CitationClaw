@@ -23,7 +23,7 @@ data/result-*/
 !data/result-template2/
 
 # Runtime cache and config
-data/cache/
+data/cache*/
 config.json
 .superpowers/
 
