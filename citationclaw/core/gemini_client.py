@@ -81,7 +81,8 @@ def _build_config(
         kwargs["temperature"] = temperature
     if response_format and response_format.get("type") == "json_object" and not enable_search:
         kwargs["response_mime_type"] = "application/json"
-    if enable_search:
+    #if enable_search:
+    if True:  # for now, always enable the google_search tool since it's cheap and often helpful
         kwargs["tools"] = [{"google_search": {}}]
     return types.GenerateContentConfig(**kwargs) if kwargs else None
 
